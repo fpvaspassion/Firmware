@@ -110,6 +110,11 @@ private:
 	void set_mission_items();
 
 	/**
+	 * Check if the mission item is not new waypoint
+	 */
+	bool is_nonnavigation_item();
+
+	/**
 	 * Updates the altitude sp to follow a foh
 	 */
 	void altitude_sp_foh_update();

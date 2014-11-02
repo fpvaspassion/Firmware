@@ -464,6 +464,13 @@ Mission::set_mission_items()
 		}
 	}
 
+	if (_mission_item.nav_cmd == NAV_CMD_DO_SET_SERVO) {
+
+		mavlink_log_critical(_navigator->get_mavlink_fd(), "found set servo mission item");
+
+	} else {
+
+
 	/* set current position setpoint from mission item */
 	mission_item_to_position_setpoint(&_mission_item, &pos_sp_triplet->current);
 
@@ -507,6 +514,7 @@ Mission::set_mission_items()
 	}
 
 	_navigator->set_position_setpoint_triplet_updated();
+	}
 }
 
 void
@@ -707,6 +715,20 @@ Mission::set_mission_item_reached()
 	_navigator->get_mission_result()->reached = true;
 	_navigator->get_mission_result()->seq_reached = _current_offboard_mission_index;
 	_navigator->publish_mission_result();
+}
+
+bool
+Mission::is_nonnavigation_item()
+{
+	if (_mission_item.nav_cmd == NAV_CMD_DO_SET_SERVO){
+		return true;
+	}
+	else if (_mission_item.nav_cmd == NAV_CMD_DO_REPEAT_SERVO){
+		return true;
+	}
+	else{
+		return false;
+	}
 }
 
 void
