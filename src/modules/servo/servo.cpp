@@ -98,12 +98,12 @@ public:
 	 * Display status.
 	 */
 	void		status();
-
+/*
 	void		open_bay();
 	void		close_bay();
 	void		drop();
 	void		lock_release();
-
+*/
 private:
 	bool	_task_should_exit;		/**< if true, task should exit */
 	int		_main_task;			/**< handle for task */
@@ -112,6 +112,7 @@ private:
 	int		_command_sub;
 	int		_wind_estimate_sub;
 	struct vehicle_command_s	_command;
+
 	struct vehicle_global_position_s _global_pos;
 	map_projection_reference_s ref;
 
@@ -240,9 +241,9 @@ Servo::start()
 void
 Servo::status()
 {
-	warnx("drop state: %d", _drop_state);
+	warnx("Servo active");
 }
-
+/*
 void
 Servo::open_bay()
 {
@@ -258,6 +259,7 @@ Servo::open_bay()
 
 	usleep(500 * 1000);
 }
+*/
 
 Servo::set_servo()
 {
@@ -270,6 +272,7 @@ Servo::set_servo()
 	usleep(500 * 1000);
 }
 
+/*
 void
 Servo::close_bay()
 {
@@ -285,7 +288,11 @@ Servo::close_bay()
 	usleep(500 * 1000);
 }
 
+*/
+
+/*
 void
+
 Servo::drop()
 {
 
@@ -313,7 +320,8 @@ Servo::drop()
 	// Give it time to drop
 	usleep(1000 * 1000);
 }
-
+*/
+/*
 void
 Servo::lock_release()
 {
@@ -322,6 +330,8 @@ Servo::lock_release()
 
 	warnx("closing release");
 }
+
+*/
 
 int
 Servo::actuators_publish()
@@ -446,8 +456,10 @@ Servo::task_main()
 	fds[0].events = POLLIN;
 
 	// Whatever state the bay is in, we want it closed on startup
+/*
 	lock_release();
 	close_bay();
+*/
 
 	while (!_task_should_exit) {
 
@@ -537,7 +549,8 @@ Servo::task_main()
 
 			switch (_drop_state) {
 
-				case DROP_STATE_TARGET_VALID:
+				/*case DROP_STATE_TARGET_VALID:
+
 				{
 
 					az = g;							// acceleration in z direction[m/s^2]
@@ -637,8 +650,9 @@ Servo::task_main()
 					_drop_state = DROP_STATE_TARGET_SET;
 				}
 				break;
+*/
 
-				case DROP_STATE_TARGET_SET:
+				/*case DROP_STATE_TARGET_SET:
 				{
 					float distance_wp2 = get_distance_to_next_waypoint(_global_pos.lat, _global_pos.lon, flight_vector_e.lat, flight_vector_e.lon);
 
@@ -659,9 +673,10 @@ Servo::task_main()
 					}
 				}
 				break;
-
-				case DROP_STATE_BAY_OPEN:
+*/
+	            /*case DROP_STATE_BAY_OPEN:
 					{
+
 						if (_drop_approval) {
 							map_projection_project(&ref, _global_pos.lat, _global_pos.lon, &x_l, &y_l);
 							x_f = x_l + _global_pos.vel_n * dt_runs;
@@ -684,11 +699,12 @@ Servo::task_main()
 								}
 							}
 						}
+
 					}
 					break;
-
-				case DROP_STATE_DROPPED:
-					/* 2s after drop, reset and close everything again */
+*/
+			    /*case DROP_STATE_DROPPED:
+					/ * 2s after drop, reset and close everything again * /
 					if ((hrt_elapsed_time(&_doors_opened) > 2 * 1000 * 1000)) {
 						_drop_state = DROP_STATE_INIT;
 						_drop_approval = false;
@@ -702,6 +718,7 @@ Servo::task_main()
 						orb_publish(ORB_ID(onboard_mission), _onboard_mission_pub, &_onboard_mission);
 					}
 					break;
+					*/
 			}
 
 			counter++;
@@ -750,72 +767,7 @@ Servo::handle_command(struct vehicle_command_s *cmd)
 		answer_command(cmd, VEHICLE_CMD_RESULT_ACCEPTED);
 		break;
 
-	case VEHICLE_CMD_PAYLOAD_PREPARE_DEPLOY:
 
-		switch ((int)(cmd->param1 + 0.5f)) {
-		case 0:
-			_drop_approval = false;
-			mavlink_log_info(_mavlink_fd, "#audio: got drop position, no approval");
-			break;
-
-		case 1:
-			_drop_approval = true;
-			mavlink_log_info(_mavlink_fd, "#audio: got drop position and approval");
-			break;
-
-		default:
-			_drop_approval = false;
-			warnx("param1 val unknown");
-			break;
-		}
-
-		// XXX check all fields (2-3)
-		_alt_clearance = cmd->param4;
-		_target_position.lat = cmd->param5;
-		_target_position.lon = cmd->param6;
-		_target_position.alt = cmd->param7;
-		_drop_state = DROP_STATE_TARGET_VALID;
-		mavlink_log_info(_mavlink_fd, "got target: %8.4f, %8.4f, %8.4f", (double)_target_position.lat,
-			(double)_target_position.lon, (double)_target_position.alt);
-		map_projection_init(&ref, _target_position.lat, _target_position.lon);
-		answer_command(cmd, VEHICLE_CMD_RESULT_ACCEPTED);
-		break;
-
-	case VEHICLE_CMD_PAYLOAD_CONTROL_DEPLOY:
-
-		if (cmd->param1 < 0) {
-
-			// Clear internal states
-			_drop_approval = false;
-			_drop_state = DROP_STATE_INIT;
-
-			// Abort if mission is present
-			_onboard_mission.current_seq = -1;
-
-			if (_onboard_mission_pub > 0) {
-				orb_publish(ORB_ID(onboard_mission), _onboard_mission_pub, &_onboard_mission);
-			}
-
-		} else {
-			switch ((int)(cmd->param1 + 0.5f)) {
-			case 0:
-				_drop_approval = false;
-				break;
-
-			case 1:
-				_drop_approval = true;
-				mavlink_log_info(_mavlink_fd, "#audio: got drop approval");
-				break;
-
-			default:
-				_drop_approval = false;
-				break;
-				// XXX handle other values
-			}
-		}
-
-		answer_command(cmd, VEHICLE_CMD_RESULT_ACCEPTED);
-		break;
 
 	default:
 		break;
