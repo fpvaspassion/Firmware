@@ -596,7 +596,7 @@ then
 	if [ $EXIT_ON_END == yes ]
 	then
 		echo "[init] Exit from nsh"
-		exit
+		#exit
 	fi
 
 # End of autostart

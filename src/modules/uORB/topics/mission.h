@@ -98,6 +98,8 @@ struct mission_item_s {
 	int do_jump_mission_index;	/**< index where the do jump will go to                 */
 	unsigned do_jump_repeat_count;	/**< how many times do jump needs to be done            */
 	unsigned do_jump_current_count;	/**< count how many times the jump has been done	*/
+	int actuator_num;	/**< actuator number to be set */
+	int actuator_value;	/**< new value for selected actuator -1.0f...1.0f*/
 };
 
 /**
