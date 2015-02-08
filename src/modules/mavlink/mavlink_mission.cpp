@@ -773,7 +773,7 @@ MavlinkMissionManager::parse_mavlink_mission_item(const mavlink_mission_item_t *
 		mission_item->do_jump_repeat_count = mavlink_mission_item->param2;
 		break;
 
-	/*
+
 	case MAV_CMD_DO_SET_SERVO:
 		mission_item->actuator_num = mavlink_mission_item->param1;
 		mission_item->actuator_value = mavlink_mission_item->param2;
@@ -781,7 +781,7 @@ MavlinkMissionManager::parse_mavlink_mission_item(const mavlink_mission_item_t *
 		mission_item->time_inside=0.0f;
 		_mavlink->send_statustext_info("SET SERVO CMD received");
 		break;
-*/
+
 	default:
 		mission_item->acceptance_radius = mavlink_mission_item->param2;
 		mission_item->time_inside = mavlink_mission_item->param1;
