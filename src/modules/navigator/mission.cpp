@@ -465,9 +465,12 @@ Mission::set_mission_items()
 	}
 
 	if (_mission_item.nav_cmd == NAV_CMD_DO_SET_SERVO) {
-
-		mavlink_log_critical(_navigator->get_mavlink_fd(), "found set servo mission item");
-
+		int fd = open("/dev/px4fmu", 0);
+		if (fd < 0)
+			{ err(1, "can't open %s", dev); }
+		ret = ioctl(fd, PWM_SERVO_SET(actuator_num), actuator_value);
+		if (ret != OK)
+			{ err(1, "PWM_SERVO_SET(%d)", actuator_num); }
 	} else {
 
 
