@@ -106,7 +106,7 @@ Airspeed::~Airspeed()
 	stop();
 
 	if (_class_instance != -1)
-		unregister_class_devname(AIRSPEED_DEVICE_PATH, _class_instance);
+		unregister_class_devname(AIRSPEED_BASE_DEVICE_PATH, _class_instance);
 
 	/* free any existing reports */
 	if (_reports != nullptr)
@@ -133,7 +133,7 @@ Airspeed::init()
 		goto out;
 
 	/* register alternate interfaces if we have to */
-	_class_instance = register_class_devname(AIRSPEED_DEVICE_PATH);
+	_class_instance = register_class_devname(AIRSPEED_BASE_DEVICE_PATH);
 
 	/* publication init */
 	if (_class_instance == CLASS_DEVICE_PRIMARY) {
@@ -147,7 +147,7 @@ Airspeed::init()
 		_airspeed_pub = orb_advertise(ORB_ID(differential_pressure), &arp);
 
 		if (_airspeed_pub < 0)
-			warnx("failed to create airspeed sensor object. uORB started?");
+			warnx("uORB started?");
 	}
 
 	ret = OK;
@@ -159,13 +159,15 @@ out:
 int
 Airspeed::probe()
 {
-	/* on initial power up the device needs more than one retry
-	   for detection. Once it is running then retries aren't
-	   needed 
+	/* on initial power up the device may need more than one retry
+	   for detection. Once it is running the number of retries can
+	   be reduced
 	*/
 	_retries = 4;
 	int ret = measure();
-	_retries = 0;
+
+        // drop back to 2 retries once initialised
+	_retries = 2;
 	return ret;
 }
 

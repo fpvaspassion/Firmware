@@ -90,7 +90,9 @@ static const int ERROR = -1;
 #define SF0X_TAKE_RANGE_REG		'd'
 #define SF02F_MIN_DISTANCE		0.0f
 #define SF02F_MAX_DISTANCE		40.0f
-#define SF0X_DEFAULT_PORT		"/dev/ttyS2"
+
+// designated SERIAL4/5 on Pixhawk
+#define SF0X_DEFAULT_PORT		"/dev/ttyS6"
 
 class SF0X : public device::CDev
 {
@@ -180,7 +182,7 @@ private:
 extern "C" __EXPORT int sf0x_main(int argc, char *argv[]);
 
 SF0X::SF0X(const char *port) :
-	CDev("SF0X", RANGE_FINDER_DEVICE_PATH),
+	CDev("SF0X", RANGE_FINDER0_DEVICE_PATH),
 	_min_distance(SF02F_MIN_DISTANCE),
 	_max_distance(SF02F_MAX_DISTANCE),
 	_reports(nullptr),
@@ -545,7 +547,7 @@ SF0X::collect()
 
 	float si_units;
 	bool valid = false;
-	
+
 	for (int i = 0; i < ret; i++) {
 		if (OK == sf0x_parser(readbuf[i], _linebuf, &_linebuf_index, &_parse_state, &si_units)) {
 			valid = true;
@@ -564,6 +566,8 @@ SF0X::collect()
 	report.timestamp = hrt_absolute_time();
 	report.error_count = perf_event_count(_comms_errors);
 	report.distance = si_units;
+	report.minimum_distance = get_minimum_distance();
+	report.maximum_distance = get_maximum_distance();
 	report.valid = valid && (si_units > get_minimum_distance() && si_units < get_maximum_distance() ? 1 : 0);
 
 	/* publish it */
@@ -753,7 +757,7 @@ start(const char *port)
 	}
 
 	/* set the poll rate to default, starts automatic data collection */
-	fd = open(RANGE_FINDER_DEVICE_PATH, 0);
+	fd = open(RANGE_FINDER0_DEVICE_PATH, 0);
 
 	if (fd < 0) {
 		warnx("device open fail");
@@ -803,10 +807,10 @@ test()
 	struct range_finder_report report;
 	ssize_t sz;
 
-	int fd = open(RANGE_FINDER_DEVICE_PATH, O_RDONLY);
+	int fd = open(RANGE_FINDER0_DEVICE_PATH, O_RDONLY);
 
 	if (fd < 0) {
-		err(1, "%s open failed (try 'sf0x start' if the driver is not running", RANGE_FINDER_DEVICE_PATH);
+		err(1, "%s open failed (try 'sf0x start' if the driver is not running", RANGE_FINDER0_DEVICE_PATH);
 	}
 
 	/* do a simple demand read */
@@ -866,7 +870,7 @@ test()
 void
 reset()
 {
-	int fd = open(RANGE_FINDER_DEVICE_PATH, O_RDONLY);
+	int fd = open(RANGE_FINDER0_DEVICE_PATH, O_RDONLY);
 
 	if (fd < 0) {
 		err(1, "failed ");

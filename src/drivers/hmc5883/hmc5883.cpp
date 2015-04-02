@@ -1,6 +1,6 @@
 /****************************************************************************
  *
- *   Copyright (c) 2012-2014 PX4 Development Team. All rights reserved.
+ *   Copyright (c) 2012-2015 PX4 Development Team. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -34,7 +34,7 @@
 /**
  * @file hmc5883.cpp
  *
- * Driver for the HMC5883 magnetometer connected via I2C.
+ * Driver for the HMC5883 / HMC5983 magnetometer connected via I2C or SPI.
  */
 
 #include <nuttx/config.h>
@@ -66,21 +66,19 @@
 #include <drivers/drv_mag.h>
 #include <drivers/drv_hrt.h>
 #include <drivers/device/ringbuffer.h>
+#include <drivers/drv_device.h>
 
 #include <uORB/uORB.h>
-#include <uORB/topics/subsystem_info.h>
 
 #include <float.h>
 #include <getopt.h>
 #include <lib/conversion/rotation.h>
 
+#include "hmc5883.h"
+
 /*
  * HMC5883 internal constants and data structures.
  */
-
-#define HMC5883L_ADDRESS		PX4_I2C_OBDEV_HMC5883
-#define HMC5883L_DEVICE_PATH_INT	"/dev/hmc5883_int"
-#define HMC5883L_DEVICE_PATH_EXT	"/dev/hmc5883_ext"
 
 /* Max measurement rate is 160Hz, however with 160 it will be set to 166 Hz, therefore workaround using 150 */
 #define HMC5883_CONVERSION_INTERVAL	(1000000 / 150)	/* microseconds */
@@ -95,9 +93,6 @@
 #define ADDR_DATA_OUT_Y_MSB		0x07
 #define ADDR_DATA_OUT_Y_LSB		0x08
 #define ADDR_STATUS			0x09
-#define ADDR_ID_A			0x0a
-#define ADDR_ID_B			0x0b
-#define ADDR_ID_C			0x0c
 
 /* modes not changeable outside of driver */
 #define HMC5883L_MODE_NORMAL		(0 << 0)  /* default */
@@ -115,10 +110,12 @@
 #define STATUS_REG_DATA_OUT_LOCK	(1 << 1) /* page 16: set if data is only partially read, read device to reset */
 #define STATUS_REG_DATA_READY		(1 << 0) /* page 16: set if all axes have valid measurements */
 
-#define ID_A_WHO_AM_I			'H'
-#define ID_B_WHO_AM_I			'4'
-#define ID_C_WHO_AM_I			'3'
-
+enum HMC5883_BUS {
+	HMC5883_BUS_ALL = 0,
+	HMC5883_BUS_I2C_INTERNAL,
+	HMC5883_BUS_I2C_EXTERNAL,
+	HMC5883_BUS_SPI
+};
 
 /* oddly, ERROR is not defined for c++ */
 #ifdef ERROR
@@ -130,10 +127,10 @@ static const int ERROR = -1;
 # error This requires CONFIG_SCHED_WORKQUEUE.
 #endif
 
-class HMC5883 : public device::I2C
+class HMC5883 : public device::CDev
 {
 public:
-	HMC5883(int bus, const char *path, enum Rotation rotation);
+	HMC5883(device::Device *interface, const char *path, enum Rotation rotation);
 	virtual ~HMC5883();
 
 	virtual int		init();
@@ -147,7 +144,7 @@ public:
 	void			print_info();
 
 protected:
-	virtual int		probe();
+	Device			*_interface;
 
 private:
 	work_s			_work;
@@ -159,10 +156,9 @@ private:
 	float 			_range_ga;
 	bool			_collect_phase;
 	int			_class_instance;
+	int			_orb_class_instance;
 
 	orb_advert_t		_mag_topic;
-	orb_advert_t		_subsystem_pub;
-	orb_id_t		_mag_orb_id;
 
 	perf_counter_t		_sample_perf;
 	perf_counter_t		_comms_errors;
@@ -174,22 +170,12 @@ private:
 	bool			_sensor_ok;		/**< sensor was found and reports ok */
 	bool			_calibrated;		/**< the calibration is valid */
 
-	int			_bus;			/**< the bus the device is connected to */
 	enum Rotation		_rotation;
 
 	struct mag_report	_last_report;           /**< used for info() */
 
 	uint8_t			_range_bits;
 	uint8_t			_conf_reg;
-
-	/**
-	 * Test whether the device supported by the driver is present at a
-	 * specific address.
-	 *
-	 * @param address	The I2C bus address to probe.
-	 * @return		True if the device is present.
-	 */
-	int			probe_address(uint8_t address);
 
 	/**
 	 * Initialise the automatic measurement state machine and start it.
@@ -349,8 +335,9 @@ private:
 extern "C" __EXPORT int hmc5883_main(int argc, char *argv[]);
 
 
-HMC5883::HMC5883(int bus, const char *path, enum Rotation rotation) :
-	I2C("HMC5883", path, bus, HMC5883L_ADDRESS, 400000),
+HMC5883::HMC5883(device::Device *interface, const char *path, enum Rotation rotation) :
+	CDev("HMC5883", path),
+	_interface(interface),
 	_work{},
 	_measure_ticks(0),
 	_reports(nullptr),
@@ -359,9 +346,8 @@ HMC5883::HMC5883(int bus, const char *path, enum Rotation rotation) :
 	_range_ga(1.3f),
 	_collect_phase(false),
 	_class_instance(-1),
+	_orb_class_instance(-1),
 	_mag_topic(-1),
-	_subsystem_pub(-1),
-	_mag_orb_id(nullptr),
 	_sample_perf(perf_alloc(PC_ELAPSED, "hmc5883_read")),
 	_comms_errors(perf_alloc(PC_COUNT, "hmc5883_comms_errors")),
 	_buffer_overflows(perf_alloc(PC_COUNT, "hmc5883_buffer_overflows")),
@@ -369,7 +355,6 @@ HMC5883::HMC5883(int bus, const char *path, enum Rotation rotation) :
 	_conf_errors(perf_alloc(PC_COUNT, "hmc5883_conf_errors")),
 	_sensor_ok(false),
 	_calibrated(false),
-	_bus(bus),
 	_rotation(rotation),
 	_last_report{0},
 	_range_bits(0),
@@ -401,7 +386,7 @@ HMC5883::~HMC5883()
 		delete _reports;
 
 	if (_class_instance != -1)
-		unregister_class_devname(MAG_DEVICE_PATH, _class_instance);
+		unregister_class_devname(MAG_BASE_DEVICE_PATH, _class_instance);
 
 	// free perf counters
 	perf_free(_sample_perf);
@@ -416,9 +401,11 @@ HMC5883::init()
 {
 	int ret = ERROR;
 
-	/* do I2C init (and probe) first */
-	if (I2C::init() != OK)
+	ret = CDev::init();
+	if (ret != OK) {
+		debug("CDev init failed");
 		goto out;
+	}
 
 	/* allocate basic report buffers */
 	_reports = new RingBuffer(2, sizeof(mag_report));
@@ -428,21 +415,7 @@ HMC5883::init()
 	/* reset the device configuration */
 	reset();
 
-	_class_instance = register_class_devname(MAG_DEVICE_PATH);
-
-	switch (_class_instance) {
-		case CLASS_DEVICE_PRIMARY:
-			_mag_orb_id = ORB_ID(sensor_mag0);
-			break;
-
-		case CLASS_DEVICE_SECONDARY:
-			_mag_orb_id = ORB_ID(sensor_mag1);
-			break;
-
-		case CLASS_DEVICE_TERTIARY:
-			_mag_orb_id = ORB_ID(sensor_mag2);
-			break;
-	}
+	_class_instance = register_class_devname(MAG_BASE_DEVICE_PATH);
 
 	ret = OK;
 	/* sensor is ok, but not calibrated */
@@ -504,7 +477,7 @@ int HMC5883::set_range(unsigned range)
 	if (OK != ret)
 		perf_count(_comms_errors);
 
-	uint8_t range_bits_in;
+	uint8_t range_bits_in = 0;
 	ret = read_reg(ADDR_CONF_B, range_bits_in);
 
 	if (OK != ret)
@@ -522,7 +495,7 @@ void HMC5883::check_range(void)
 {
 	int ret;
 
-	uint8_t range_bits_in;
+	uint8_t range_bits_in = 0;
 	ret = read_reg(ADDR_CONF_B, range_bits_in);
 	if (OK != ret) {
 		perf_count(_comms_errors);
@@ -545,7 +518,7 @@ void HMC5883::check_conf(void)
 {
 	int ret;
 
-	uint8_t conf_reg_in;
+	uint8_t conf_reg_in = 0;
 	ret = read_reg(ADDR_CONF_A, conf_reg_in);
 	if (OK != ret) {
 		perf_count(_comms_errors);
@@ -557,30 +530,6 @@ void HMC5883::check_conf(void)
 		if (OK != ret)
 			perf_count(_comms_errors);
 	}
-}
-
-int
-HMC5883::probe()
-{
-	uint8_t data[3] = {0, 0, 0};
-
-	_retries = 10;
-
-	if (read_reg(ADDR_ID_A, data[0]) ||
-	    read_reg(ADDR_ID_B, data[1]) ||
-	    read_reg(ADDR_ID_C, data[2]))
-		debug("read_reg fail");
-
-	_retries = 2;
-
-	if ((data[0] != ID_A_WHO_AM_I) ||
-	    (data[1] != ID_B_WHO_AM_I) ||
-	    (data[2] != ID_C_WHO_AM_I)) {
-		debug("ID byte mismatch (%02x,%02x,%02x)", data[0], data[1], data[2]);
-		return -EIO;
-	}
-
-	return OK;
 }
 
 ssize_t
@@ -643,6 +592,8 @@ HMC5883::read(struct file *filp, char *buffer, size_t buflen)
 int
 HMC5883::ioctl(struct file *filp, int cmd, unsigned long arg)
 {
+	unsigned dummy = arg;
+
 	switch (cmd) {
 	case SENSORIOCSPOLLRATE: {
 		switch (arg) {
@@ -768,14 +719,15 @@ HMC5883::ioctl(struct file *filp, int cmd, unsigned long arg)
 		return check_calibration();
 
 	case MAGIOCGEXTERNAL:
-		if (_bus == PX4_I2C_BUS_EXPANSION)
-			return 1;
-		else
-			return 0;
+		debug("MAGIOCGEXTERNAL in main driver");
+		return _interface->ioctl(cmd, dummy);
+
+	case DEVIOCGDEVICEID:
+		return _interface->ioctl(cmd, dummy);
 
 	default:
 		/* give it to the superclass */
-		return I2C::ioctl(filp, cmd, arg);
+		return CDev::ioctl(filp, cmd, arg);
 	}
 }
 
@@ -890,11 +842,15 @@ HMC5883::collect()
 	} report;
 
 	int	ret;
-	uint8_t	cmd;
 	uint8_t check_counter;
 
 	perf_begin(_sample_perf);
 	struct mag_report new_report;
+	bool sensor_is_onboard = false;
+
+	float xraw_f;
+	float yraw_f;
+	float zraw_f;
 
 	/* this should be fairly close to the end of the measurement, so the best approximation of the time */
 	new_report.timestamp = hrt_absolute_time();
@@ -908,8 +864,7 @@ HMC5883::collect()
 	 */
 
 	/* get measurements from the device */
-	cmd = ADDR_DATA_OUT_X_MSB;
-	ret = transfer(&cmd, 1, (uint8_t *)&hmc_report, sizeof(hmc_report));
+	ret = _interface->read(ADDR_DATA_OUT_X_MSB, (uint8_t *)&hmc_report, sizeof(hmc_report));
 
 	if (ret != OK) {
 		perf_count(_comms_errors);
@@ -946,34 +901,43 @@ HMC5883::collect()
 
 	/* scale values for output */
 
-#ifdef PX4_I2C_BUS_ONBOARD
-	if (_bus == PX4_I2C_BUS_ONBOARD) {
+	// XXX revisit for SPI part, might require a bus type IOCTL
+	unsigned dummy;
+	sensor_is_onboard = !_interface->ioctl(MAGIOCGEXTERNAL, dummy);
+	if (sensor_is_onboard) {
 		// convert onboard so it matches offboard for the
 		// scaling below
 		report.y = -report.y;
 		report.x = -report.x;
         }
-#endif
 
-	/* the standard external mag by 3DR has x pointing to the
+        /* the standard external mag by 3DR has x pointing to the
 	 * right, y pointing backwards, and z down, therefore switch x
 	 * and y and invert y */
-	new_report.x = ((-report.y * _range_scale) - _scale.x_offset) * _scale.x_scale;
-	/* flip axes and negate value for y */
-	new_report.y = ((report.x * _range_scale) - _scale.y_offset) * _scale.y_scale;
-	/* z remains z */
-	new_report.z = ((report.z * _range_scale) - _scale.z_offset) * _scale.z_scale;
+        xraw_f = -report.y;
+	yraw_f = report.x;
+	zraw_f = report.z;
 
 	// apply user specified rotation
-	rotate_3f(_rotation, new_report.x, new_report.y, new_report.z);
+	rotate_3f(_rotation, xraw_f, yraw_f, zraw_f);
+
+	new_report.x = ((xraw_f * _range_scale) - _scale.x_offset) * _scale.x_scale;
+	/* flip axes and negate value for y */
+	new_report.y = ((yraw_f * _range_scale) - _scale.y_offset) * _scale.y_scale;
+	/* z remains z */
+	new_report.z = ((zraw_f * _range_scale) - _scale.z_offset) * _scale.z_scale;
+
+	/* this sensor does not measure temperature, output a constant value */
+	new_report.temperature = 0.0f;
 
 	if (!(_pub_blocked)) {
 
 		if (_mag_topic != -1) {
 			/* publish it */
-			orb_publish(_mag_orb_id, _mag_topic, &new_report);
+			orb_publish(ORB_ID(sensor_mag), _mag_topic, &new_report);
 		} else {
-			_mag_topic = orb_advertise(_mag_orb_id, &new_report);
+			_mag_topic = orb_advertise_multi(ORB_ID(sensor_mag), &new_report,
+				&_orb_class_instance, (sensor_is_onboard) ? ORB_PRIO_HIGH : ORB_PRIO_MAX);
 
 			if (_mag_topic < 0)
 				debug("ADVERT FAIL");
@@ -1049,11 +1013,9 @@ int HMC5883::calibrate(struct file *filp, unsigned enable)
 	 * LSM/Ga, giving 1.16 and 1.08 */
 	float expected_cal[3] = { 1.16f, 1.08f, 1.08f };
 
-	warnx("starting mag scale calibration");
-
 	/* start the sensor polling at 50 Hz */
 	if (OK != ioctl(filp, SENSORIOCSPOLLRATE, 50)) {
-		warn("failed to set 2Hz poll rate");
+		warn("FAILED: SENSORIOCSPOLLRATE 2Hz");
 		ret = 1;
 		goto out;
 	}
@@ -1061,25 +1023,25 @@ int HMC5883::calibrate(struct file *filp, unsigned enable)
 	/* Set to 2.5 Gauss. We ask for 3 to get the right part of
          * the chained if statement above. */
 	if (OK != ioctl(filp, MAGIOCSRANGE, 3)) {
-		warnx("failed to set 2.5 Ga range");
+		warnx("FAILED: MAGIOCSRANGE 3.3 Ga");
 		ret = 1;
 		goto out;
 	}
 
 	if (OK != ioctl(filp, MAGIOCEXSTRAP, 1)) {
-		warnx("failed to enable sensor calibration mode");
+		warnx("FAILED: MAGIOCEXSTRAP 1");
 		ret = 1;
 		goto out;
 	}
 
 	if (OK != ioctl(filp, MAGIOCGSCALE, (long unsigned int)&mscale_previous)) {
-		warn("WARNING: failed to get scale / offsets for mag");
+		warn("FAILED: MAGIOCGSCALE 1");
 		ret = 1;
 		goto out;
 	}
 
 	if (OK != ioctl(filp, MAGIOCSSCALE, (long unsigned int)&mscale_null)) {
-		warn("WARNING: failed to set null scale / offsets for mag");
+		warn("FAILED: MAGIOCSSCALE 1");
 		ret = 1;
 		goto out;
 	}
@@ -1094,7 +1056,7 @@ int HMC5883::calibrate(struct file *filp, unsigned enable)
 		ret = ::poll(&fds, 1, 2000);
 
 		if (ret != 1) {
-			warn("timed out waiting for sensor data");
+			warn("ERROR: TIMEOUT 1");
 			goto out;
 		}
 
@@ -1102,7 +1064,7 @@ int HMC5883::calibrate(struct file *filp, unsigned enable)
 		sz = ::read(fd, &report, sizeof(report));
 
 		if (sz != sizeof(report)) {
-			warn("periodic read failed");
+			warn("ERROR: READ 1");
 			ret = -EIO;
 			goto out;
 		}
@@ -1118,7 +1080,7 @@ int HMC5883::calibrate(struct file *filp, unsigned enable)
 		ret = ::poll(&fds, 1, 2000);
 
 		if (ret != 1) {
-			warn("timed out waiting for sensor data");
+			warn("ERROR: TIMEOUT 2");
 			goto out;
 		}
 
@@ -1126,7 +1088,7 @@ int HMC5883::calibrate(struct file *filp, unsigned enable)
 		sz = ::read(fd, &report, sizeof(report));
 
 		if (sz != sizeof(report)) {
-			warn("periodic read failed");
+			warn("ERROR: READ 2");
 			ret = -EIO;
 			goto out;
 		}
@@ -1142,32 +1104,18 @@ int HMC5883::calibrate(struct file *filp, unsigned enable)
 			sum_excited[1] += cal[1];
 			sum_excited[2] += cal[2];
 		}
-
-		//warnx("periodic read %u", i);
-		//warnx("measurement: %.6f  %.6f  %.6f", (double)report.x, (double)report.y, (double)report.z);
-		//warnx("cal: %.6f  %.6f  %.6f", (double)cal[0], (double)cal[1], (double)cal[2]);
 	}
 
 	if (good_count < 5) {
-		warn("failed calibration");
 		ret = -EIO;
 		goto out;
 	}
-
-#if 0
-	warnx("measurement avg: %.6f  %.6f  %.6f", 
-	      (double)sum_excited[0]/good_count, 
-	      (double)sum_excited[1]/good_count, 
-	      (double)sum_excited[2]/good_count);
-#endif
 
 	float scaling[3];
 
 	scaling[0] = sum_excited[0] / good_count;
 	scaling[1] = sum_excited[1] / good_count;
 	scaling[2] = sum_excited[2] / good_count;
-
-	warnx("axes scaling: %.6f  %.6f  %.6f", (double)scaling[0], (double)scaling[1], (double)scaling[2]);
 
 	/* set scaling in device */
 	mscale_previous.x_scale = scaling[0];
@@ -1179,29 +1127,26 @@ int HMC5883::calibrate(struct file *filp, unsigned enable)
 out:
 
 	if (OK != ioctl(filp, MAGIOCSSCALE, (long unsigned int)&mscale_previous)) {
-		warn("failed to set new scale / offsets for mag");
+		warn("FAILED: MAGIOCSSCALE 2");
 	}
 
 	/* set back to normal mode */
 	/* Set to 1.1 Gauss */
 	if (OK != ::ioctl(fd, MAGIOCSRANGE, 1)) {
-		warnx("failed to set 1.1 Ga range");
+		warnx("FAILED: MAGIOCSRANGE 1.1 Ga");
 	}
 
 	if (OK != ::ioctl(fd, MAGIOCEXSTRAP, 0)) {
-		warnx("failed to disable sensor calibration mode");
+		warnx("FAILED: MAGIOCEXSTRAP 0");
 	}
 
 	if (ret == OK) {
-		if (!check_scale()) {
-			warnx("mag scale calibration successfully finished.");
-		} else {
-			warnx("mag scale calibration finished with invalid results.");
+		if (check_scale()) {
+			/* failed */
+			warnx("FAILED: SCALE");
 			ret = ERROR;
 		}
 
-	} else {
-		warnx("mag scale calibration failed.");
 	}
 
 	return ret;
@@ -1250,24 +1195,6 @@ int HMC5883::check_calibration()
 		warnx("mag cal status changed %s%s", (scale_valid) ? "" : "scale invalid ",
 					  (offset_valid) ? "" : "offset invalid");
 		_calibrated = (offset_valid && scale_valid);
-
-
-		// XXX Change advertisement
-
-		/* notify about state change */
-		struct subsystem_info_s info = {
-			true,
-			true,
-			_calibrated,
-			SUBSYSTEM_TYPE_MAG};
-
-		if (!(_pub_blocked)) {
-			if (_subsystem_pub > 0) {
-				orb_publish(ORB_ID(subsystem_info), _subsystem_pub, &info);
-			} else {
-				_subsystem_pub = orb_advertise(ORB_ID(subsystem_info), &info);
-			}
-		}
 	}
 
 	/* return 0 if calibrated, 1 else */
@@ -1299,7 +1226,7 @@ int HMC5883::set_excitement(unsigned enable)
 	if (OK != ret)
 		perf_count(_comms_errors);
 
-	uint8_t conf_reg_ret;
+	uint8_t conf_reg_ret = 0;
 	read_reg(ADDR_CONF_A, conf_reg_ret);
 
 	//print_info();
@@ -1310,15 +1237,17 @@ int HMC5883::set_excitement(unsigned enable)
 int
 HMC5883::write_reg(uint8_t reg, uint8_t val)
 {
-	uint8_t cmd[] = { reg, val };
-
-	return transfer(&cmd[0], 2, nullptr, 0);
+	uint8_t buf = val;
+	return _interface->write(reg, &buf, 1);
 }
 
 int
 HMC5883::read_reg(uint8_t reg, uint8_t &val)
 {
-	return transfer(&reg, 1, &val, 1);
+	uint8_t buf = val;
+	int ret = _interface->read(reg, &buf, 1);
+	val = buf;
+	return ret;
 }
 
 float
@@ -1362,15 +1291,71 @@ namespace hmc5883
 #endif
 const int ERROR = -1;
 
-HMC5883	*g_dev_int = nullptr;
-HMC5883	*g_dev_ext = nullptr;
+/*
+  list of supported bus configurations
+ */
+struct hmc5883_bus_option {
+	enum HMC5883_BUS busid;
+	const char *devpath;
+	HMC5883_constructor interface_constructor;
+	uint8_t busnum;
+	HMC5883	*dev;
+} bus_options[] = {
+	{ HMC5883_BUS_I2C_EXTERNAL, "/dev/hmc5883_ext", &HMC5883_I2C_interface, PX4_I2C_BUS_EXPANSION, NULL },
+#ifdef PX4_I2C_BUS_ONBOARD
+	{ HMC5883_BUS_I2C_INTERNAL, "/dev/hmc5883_int", &HMC5883_I2C_interface, PX4_I2C_BUS_ONBOARD, NULL },
+#endif
+#ifdef PX4_SPIDEV_HMC
+	{ HMC5883_BUS_SPI, "/dev/hmc5883_spi", &HMC5883_SPI_interface, PX4_SPI_BUS_SENSORS, NULL },
+#endif
+};
+#define NUM_BUS_OPTIONS (sizeof(bus_options)/sizeof(bus_options[0]))
 
-void	start(int bus, enum Rotation rotation);
-void	test(int bus);
-void	reset(int bus);
-void	info(int bus);
-int	calibrate(int bus);
+void	start(enum HMC5883_BUS busid, enum Rotation rotation);
+bool	start_bus(struct hmc5883_bus_option &bus, enum Rotation rotation);
+struct hmc5883_bus_option &find_bus(enum HMC5883_BUS busid);
+void	test(enum HMC5883_BUS busid);
+void	reset(enum HMC5883_BUS busid);
+int	info(enum HMC5883_BUS busid);
+int	calibrate(enum HMC5883_BUS busid);
 void	usage();
+
+/**
+ * start driver for a specific bus option
+ */
+bool
+start_bus(struct hmc5883_bus_option &bus, enum Rotation rotation)
+{
+	if (bus.dev != nullptr)
+		errx(1,"bus option already started");
+
+	device::Device *interface = bus.interface_constructor(bus.busnum);
+	if (interface->init() != OK) {
+		delete interface;
+		warnx("no device on bus %u", (unsigned)bus.busid);
+		return false;
+	}
+	bus.dev = new HMC5883(interface, bus.devpath, rotation);
+	if (bus.dev != nullptr && OK != bus.dev->init()) {
+		delete bus.dev;
+		bus.dev = NULL;
+		return false;
+	}
+			
+	int fd = open(bus.devpath, O_RDONLY);
+	if (fd < 0) {
+		return false;
+	}
+
+	if (ioctl(fd, SENSORIOCSPOLLRATE, SENSOR_POLLRATE_DEFAULT) < 0) {
+		close(fd);
+		errx(1,"Failed to setup poll rate");
+	}
+	close(fd);
+
+	return true;
+}
+
 
 /**
  * Start the driver.
@@ -1379,82 +1364,42 @@ void	usage();
  * is either successfully up and running or failed to start.
  */
 void
-start(int bus, enum Rotation rotation)
+start(enum HMC5883_BUS busid, enum Rotation rotation)
 {
-	int fd;
+	bool started = false;
 
-	/* create the driver, attempt expansion bus first */
-	if (bus == -1 || bus == PX4_I2C_BUS_EXPANSION) {
-		if (g_dev_ext != nullptr)
-			errx(0, "already started external");
-		g_dev_ext = new HMC5883(PX4_I2C_BUS_EXPANSION, HMC5883L_DEVICE_PATH_EXT, rotation);
-		if (g_dev_ext != nullptr && OK != g_dev_ext->init()) {
-			delete g_dev_ext;
-			g_dev_ext = nullptr;
+	for (unsigned i = 0; i < NUM_BUS_OPTIONS; i++) {
+		if (busid == HMC5883_BUS_ALL && bus_options[i].dev != NULL) {
+			// this device is already started
+			continue;
 		}
-	}
-			
-
-#ifdef PX4_I2C_BUS_ONBOARD
-	/* if this failed, attempt onboard sensor */
-	if (bus == -1 || bus == PX4_I2C_BUS_ONBOARD) {
-		if (g_dev_int != nullptr)
-			errx(0, "already started internal");
-		g_dev_int = new HMC5883(PX4_I2C_BUS_ONBOARD, HMC5883L_DEVICE_PATH_INT, rotation);
-		if (g_dev_int != nullptr && OK != g_dev_int->init()) {
-
-			/* tear down the failing onboard instance */
-			delete g_dev_int;
-			g_dev_int = nullptr;
-
-			if (bus == PX4_I2C_BUS_ONBOARD) {
-				goto fail;
-			}
+		if (busid != HMC5883_BUS_ALL && bus_options[i].busid != busid) {
+			// not the one that is asked for
+			continue;
 		}
-		if (g_dev_int == nullptr && bus == PX4_I2C_BUS_ONBOARD) {
-			goto fail;
-		}
-	}
-#endif
-
-	if (g_dev_int == nullptr && g_dev_ext == nullptr)
-		goto fail;
-
-	/* set the poll rate to default, starts automatic data collection */
-	if (g_dev_int != nullptr) {
-		fd = open(HMC5883L_DEVICE_PATH_INT, O_RDONLY);
-		if (fd < 0)
-			goto fail;
-
-		if (ioctl(fd, SENSORIOCSPOLLRATE, SENSOR_POLLRATE_DEFAULT) < 0)
-			goto fail;
-		close(fd);
+		started |= start_bus(bus_options[i], rotation);
 	}
 
-	if (g_dev_ext != nullptr) {
-		fd = open(HMC5883L_DEVICE_PATH_EXT, O_RDONLY);
-		if (fd < 0)
-			goto fail;
-
-		if (ioctl(fd, SENSORIOCSPOLLRATE, SENSOR_POLLRATE_DEFAULT) < 0)
-			goto fail;
-		close(fd);
-	}
+	if (!started)
+		errx(1, "driver start failed");
 
 	exit(0);
-
-fail:
-	if (g_dev_int != nullptr && (bus == -1 || bus == PX4_I2C_BUS_ONBOARD)) {
-		delete g_dev_int;
-		g_dev_int = nullptr;
-	}
-	if (g_dev_ext != nullptr && (bus == -1 || bus == PX4_I2C_BUS_EXPANSION)) {
-		delete g_dev_ext;
-		g_dev_ext = nullptr;
-	}
-
-	errx(1, "driver start failed");
 }
+
+/**
+ * find a bus structure for a busid
+ */
+struct hmc5883_bus_option &find_bus(enum HMC5883_BUS busid)
+{
+	for (unsigned i = 0; i < NUM_BUS_OPTIONS; i++) {
+		if ((busid == HMC5883_BUS_ALL ||
+		     busid == bus_options[i].busid) && bus_options[i].dev != NULL) {
+			return bus_options[i];
+		}
+	}	
+	errx(1, "bus %u not started", (unsigned)busid);
+}
+
 
 /**
  * Perform some basic functional tests on the driver;
@@ -1462,12 +1407,13 @@ fail:
  * and automatic modes.
  */
 void
-test(int bus)
+test(enum HMC5883_BUS busid)
 {
+	struct hmc5883_bus_option &bus = find_bus(busid);
 	struct mag_report report;
 	ssize_t sz;
 	int ret;
-	const char *path = (bus==PX4_I2C_BUS_ONBOARD?HMC5883L_DEVICE_PATH_INT:HMC5883L_DEVICE_PATH_EXT);
+	const char *path = bus.devpath;
 
 	int fd = open(path, O_RDONLY);
 
@@ -1565,10 +1511,11 @@ test(int bus)
  * configuration register A back to 00 (Normal Measurement Mode), e.g. 0x10.
  * Using the self test method described above, the user can scale sensor
  */
-int calibrate(int bus)
+int calibrate(enum HMC5883_BUS busid)
 {
 	int ret;
-	const char *path = (bus==PX4_I2C_BUS_ONBOARD?HMC5883L_DEVICE_PATH_INT:HMC5883L_DEVICE_PATH_EXT);
+	struct hmc5883_bus_option &bus = find_bus(busid);
+	const char *path = bus.devpath;
 
 	int fd = open(path, O_RDONLY);
 
@@ -1593,9 +1540,10 @@ int calibrate(int bus)
  * Reset the driver.
  */
 void
-reset(int bus)
+reset(enum HMC5883_BUS busid)
 {
-	const char *path = (bus==PX4_I2C_BUS_ONBOARD?HMC5883L_DEVICE_PATH_INT:HMC5883L_DEVICE_PATH_EXT);
+	struct hmc5883_bus_option &bus = find_bus(busid);
+	const char *path = bus.devpath;
 
 	int fd = open(path, O_RDONLY);
 
@@ -1614,16 +1562,13 @@ reset(int bus)
 /**
  * Print a little info about the driver.
  */
-void
-info(int bus)
+int
+info(enum HMC5883_BUS busid)
 {
-	HMC5883 *g_dev = (bus == PX4_I2C_BUS_ONBOARD?g_dev_int:g_dev_ext);
-	if (g_dev == nullptr)
-		errx(1, "driver not running");
+	struct hmc5883_bus_option &bus = find_bus(busid);
 
-	printf("state @ %p\n", g_dev);
-	g_dev->print_info();
-
+	warnx("running on bus: %u (%s)\n", (unsigned)bus.busid, bus.devpath);
+	bus.dev->print_info();
 	exit(0);
 }
 
@@ -1635,7 +1580,7 @@ usage()
 	warnx("    -R rotation");
 	warnx("    -C calibrate on start");
 	warnx("    -X only external bus");
-#ifdef PX4_I2C_BUS_ONBOARD
+#if (PX4_I2C_BUS_ONBOARD || PX4_SPIDEV_HMC)
 	warnx("    -I only internal bus");
 #endif
 }
@@ -1646,22 +1591,25 @@ int
 hmc5883_main(int argc, char *argv[])
 {
 	int ch;
-	int bus = -1;
+	enum HMC5883_BUS busid = HMC5883_BUS_ALL;
 	enum Rotation rotation = ROTATION_NONE;
         bool calibrate = false;
 
-	while ((ch = getopt(argc, argv, "XIR:C")) != EOF) {
+	while ((ch = getopt(argc, argv, "XISR:C")) != EOF) {
 		switch (ch) {
 		case 'R':
 			rotation = (enum Rotation)atoi(optarg);
 			break;
-#ifdef PX4_I2C_BUS_ONBOARD
+#if (PX4_I2C_BUS_ONBOARD || PX4_SPIDEV_HMC)
 		case 'I':
-			bus = PX4_I2C_BUS_ONBOARD;
+			busid = HMC5883_BUS_I2C_INTERNAL;
 			break;
 #endif
 		case 'X':
-			bus = PX4_I2C_BUS_EXPANSION;
+			busid = HMC5883_BUS_I2C_EXTERNAL;
+			break;
+		case 'S':
+			busid = HMC5883_BUS_SPI;
 			break;
 		case 'C':
 			calibrate = true;
@@ -1678,14 +1626,16 @@ hmc5883_main(int argc, char *argv[])
 	 * Start/load the driver.
 	 */
 	if (!strcmp(verb, "start")) {
-		hmc5883::start(bus, rotation);
+		hmc5883::start(busid, rotation);
 		if (calibrate) {
-			if (hmc5883::calibrate(bus) == 0) {
+			if (hmc5883::calibrate(busid) == 0) {
 				errx(0, "calibration successful");
 				
 			} else {
 				errx(1, "calibration failed");
 			}
+		} else {
+			exit(0);
 		}
 	}
 
@@ -1693,25 +1643,25 @@ hmc5883_main(int argc, char *argv[])
 	 * Test the driver/device.
 	 */
 	if (!strcmp(verb, "test"))
-		hmc5883::test(bus);
+		hmc5883::test(busid);
 
 	/*
 	 * Reset the driver.
 	 */
 	if (!strcmp(verb, "reset"))
-		hmc5883::reset(bus);
+		hmc5883::reset(busid);
 
 	/*
 	 * Print driver information.
 	 */
 	if (!strcmp(verb, "info") || !strcmp(verb, "status"))
-		hmc5883::info(bus);
+		hmc5883::info(busid);
 
 	/*
 	 * Autocalibrate the scaling
 	 */
 	if (!strcmp(verb, "calibrate")) {
-		if (hmc5883::calibrate(bus) == 0) {
+		if (hmc5883::calibrate(busid) == 0) {
 			errx(0, "calibration successful");
 
 		} else {

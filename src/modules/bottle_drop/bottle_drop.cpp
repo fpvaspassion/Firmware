@@ -57,8 +57,13 @@
 #include <uORB/uORB.h>
 #include <uORB/topics/vehicle_command.h>
 #include <uORB/topics/actuator_controls.h>
+#include <uORB/topics/actuator_controls_0.h>
+#include <uORB/topics/actuator_controls_1.h>
+#include <uORB/topics/actuator_controls_2.h>
+#include <uORB/topics/actuator_controls_3.h>
 #include <uORB/topics/wind_estimate.h>
 #include <uORB/topics/parameter_update.h>
+#include <uORB/topics/vehicle_global_position.h>
 #include <systemlib/systemlib.h>
 #include <systemlib/param/param.h>
 #include <systemlib/err.h>
@@ -223,7 +228,7 @@ BottleDrop::start()
 	_main_task = task_spawn_cmd("bottle_drop",
 				    SCHED_DEFAULT,
 				    SCHED_PRIORITY_DEFAULT + 15,
-				    2048,
+				    1500,
 				    (main_t)&BottleDrop::task_main_trampoline,
 				    nullptr);
 
@@ -283,7 +288,6 @@ BottleDrop::drop()
 	// force the door open if we have to
 	if (_doors_opened == 0) {
 		open_bay();
-		warnx("bay not ready, forced open");
 	}
 
 	while (hrt_elapsed_time(&_doors_opened) < 500 * 1000 && hrt_elapsed_time(&starttime) < 2000000) {
@@ -524,6 +528,9 @@ BottleDrop::task_main()
 			}
 
 			switch (_drop_state) {
+				case DROP_STATE_INIT:
+					// do nothing
+					break;
 
 				case DROP_STATE_TARGET_VALID:
 				{
@@ -690,6 +697,10 @@ BottleDrop::task_main()
 						orb_publish(ORB_ID(onboard_mission), _onboard_mission_pub, &_onboard_mission);
 					}
 					break;
+
+				case DROP_STATE_BAY_CLOSED:
+					// do nothing
+					break;
 			}
 
 			counter++;
@@ -723,16 +734,16 @@ BottleDrop::handle_command(struct vehicle_command_s *cmd)
 		if (cmd->param1 > 0.5f && cmd->param2 > 0.5f) {
 			open_bay();
 			drop();
-			mavlink_log_info(_mavlink_fd, "#audio: drop bottle");
+			mavlink_log_critical(_mavlink_fd, "drop bottle");
 
 		} else if (cmd->param1 > 0.5f) {
 			open_bay();
-			mavlink_log_info(_mavlink_fd, "#audio: opening bay");
+			mavlink_log_critical(_mavlink_fd, "opening bay");
 
 		} else {
 			lock_release();
 			close_bay();
-			mavlink_log_info(_mavlink_fd, "#audio: closing bay");
+			mavlink_log_critical(_mavlink_fd, "closing bay");
 		}
 
 		answer_command(cmd, VEHICLE_CMD_RESULT_ACCEPTED);
@@ -743,12 +754,12 @@ BottleDrop::handle_command(struct vehicle_command_s *cmd)
 		switch ((int)(cmd->param1 + 0.5f)) {
 		case 0:
 			_drop_approval = false;
-			mavlink_log_info(_mavlink_fd, "#audio: got drop position, no approval");
+			mavlink_log_critical(_mavlink_fd, "got drop position, no approval");
 			break;
 
 		case 1:
 			_drop_approval = true;
-			mavlink_log_info(_mavlink_fd, "#audio: got drop position and approval");
+			mavlink_log_critical(_mavlink_fd, "got drop position and approval");
 			break;
 
 		default:
@@ -818,19 +829,19 @@ BottleDrop::answer_command(struct vehicle_command_s *cmd, enum VEHICLE_CMD_RESUL
 		break;
 
 	case VEHICLE_CMD_RESULT_DENIED:
-		mavlink_log_critical(_mavlink_fd, "#audio: command denied: %u", cmd->command);
+		mavlink_log_critical(_mavlink_fd, "command denied: %u", cmd->command);
 		break;
 
 	case VEHICLE_CMD_RESULT_FAILED:
-		mavlink_log_critical(_mavlink_fd, "#audio: command failed: %u", cmd->command);
+		mavlink_log_critical(_mavlink_fd, "command failed: %u", cmd->command);
 		break;
 
 	case VEHICLE_CMD_RESULT_TEMPORARILY_REJECTED:
-		mavlink_log_critical(_mavlink_fd, "#audio: command temporarily rejected: %u", cmd->command);
+		mavlink_log_critical(_mavlink_fd, "command temporarily rejected: %u", cmd->command);
 		break;
 
 	case VEHICLE_CMD_RESULT_UNSUPPORTED:
-		mavlink_log_critical(_mavlink_fd, "#audio: command unsupported: %u", cmd->command);
+		mavlink_log_critical(_mavlink_fd, "command unsupported: %u", cmd->command);
 		break;
 
 	default:

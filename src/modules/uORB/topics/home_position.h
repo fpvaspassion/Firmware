@@ -55,13 +55,12 @@
 /**
  * GPS home position in WGS84 coordinates.
  */
-struct home_position_s
-{
+struct home_position_s {
 	uint64_t timestamp;			/**< Timestamp (microseconds since system boot)	*/
 
 	double lat;				/**< Latitude in degrees 			*/
 	double lon;				/**< Longitude in degrees			*/
-	float alt;				/**< Altitude in meters				*/
+	float alt;				/**< Altitude in meters	(AMSL)		*/
 
 	float x;				/**< X coordinate in meters			*/
 	float y;				/**< Y coordinate in meters			*/

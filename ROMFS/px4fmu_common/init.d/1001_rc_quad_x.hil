@@ -2,11 +2,11 @@
 #
 # HIL Quadcopter X
 #
-# Anton Babushkin <anton.babushkin@me.com>
+# Anton Babushkin <anton@px4.io>
 #
 
 sh /etc/init.d/rc.mc_defaults
 
-set MIXER FMU_quad_x
+set MIXER quad_x
 
 set HIL yes

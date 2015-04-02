@@ -1,6 +1,6 @@
 /****************************************************************************
  *
- *   Copyright (c) 2012-2014 PX4 Development Team. All rights reserved.
+ *   Copyright (c) 2012-2015 PX4 Development Team. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -89,11 +89,10 @@
 #endif
 static const int ERROR = -1;
 
-#define DEFAULT_DEVICE_NAME	"/dev/ttyS1"
-#define MAX_DATA_RATE	20000	// max data rate in bytes/s
-#define MAIN_LOOP_DELAY 10000	// 100 Hz @ 1000 bytes/s data rate
-
-#define TX_BUFFER_GAP MAVLINK_MAX_PACKET_LEN
+#define DEFAULT_DEVICE_NAME			"/dev/ttyS1"
+#define MAX_DATA_RATE				20000	///< max data rate in bytes/s
+#define MAIN_LOOP_DELAY 			10000	///< 100 Hz @ 1000 bytes/s data rate
+#define FLOW_CONTROL_DISABLE_THRESHOLD		40	///< picked so that some messages still would fit it.
 
 static Mavlink *_mavlink_instances = nullptr;
 
@@ -167,8 +166,10 @@ Mavlink::Mavlink() :
 	_param_initialized(false),
 	_param_system_id(0),
 	_param_component_id(0),
-	_param_system_type(0),
+	_param_system_type(MAV_TYPE_FIXED_WING),
 	_param_use_hil_gps(0),
+	_param_forward_externalsp(0),
+	_system_type(0),
 
 	/* performance counters */
 	_loop_perf(perf_alloc(PC_ELAPSED, "mavlink_el")),
@@ -524,7 +525,7 @@ void Mavlink::mavlink_update_system(void)
 	param_get(_param_system_type, &system_type);
 
 	if (system_type >= 0 && system_type < MAV_TYPE_ENUM_END) {
-		mavlink_system.type = system_type;
+		_system_type = system_type;
 	}
 
 	int32_t use_hil_gps;
@@ -728,7 +729,7 @@ Mavlink::get_free_tx_buf()
 	int buf_free = 0;
 	(void) ioctl(_uart_fd, FIONWRITE, (unsigned long)&buf_free);
 
-	if (get_flow_control_enabled() && buf_free < TX_BUFFER_GAP) {
+	if (get_flow_control_enabled() && buf_free < FLOW_CONTROL_DISABLE_THRESHOLD) {
 		/* Disable hardware flow control:
 		 * if no successful write since a defined time
 		 * and if the last try was not the last successful write
@@ -755,7 +756,7 @@ Mavlink::send_message(const uint8_t msgid, const void *msg)
 
 	pthread_mutex_lock(&_send_mutex);
 
-	int buf_free = get_free_tx_buf();
+	unsigned buf_free = get_free_tx_buf();
 
 	uint8_t payload_len = mavlink_message_lengths[msgid];
 	unsigned packet_len = payload_len + MAVLINK_NUM_NON_PAYLOAD_BYTES;
@@ -763,7 +764,7 @@ Mavlink::send_message(const uint8_t msgid, const void *msg)
 	_last_write_try_time = hrt_absolute_time();
 
 	/* check if there is space in the buffer, let it overflow else */
-	if (buf_free < TX_BUFFER_GAP) {
+	if (buf_free < packet_len) {
 		/* no enough space in buffer to send */
 		count_txerr();
 		count_txerrbytes(packet_len);
@@ -820,14 +821,14 @@ Mavlink::resend_message(mavlink_message_t *msg)
 
 	pthread_mutex_lock(&_send_mutex);
 
-	int buf_free = get_free_tx_buf();
+	unsigned buf_free = get_free_tx_buf();
 
 	_last_write_try_time = hrt_absolute_time();
 
 	unsigned packet_len = msg->len + MAVLINK_NUM_NON_PAYLOAD_BYTES;
 
 	/* check if there is space in the buffer, let it overflow else */
-	if (buf_free < TX_BUFFER_GAP) {
+	if (buf_free < packet_len) {
 		/* no enough space in buffer to send */
 		count_txerr();
 		count_txerrbytes(packet_len);
@@ -902,20 +903,20 @@ Mavlink::send_statustext(unsigned char severity, const char *string)
 	mavlink_logbuffer_write(&_logbuffer, &logmsg);
 }
 
-MavlinkOrbSubscription *Mavlink::add_orb_subscription(const orb_id_t topic)
+MavlinkOrbSubscription *Mavlink::add_orb_subscription(const orb_id_t topic, int instance)
 {
 	/* check if already subscribed to this topic */
 	MavlinkOrbSubscription *sub;
 
 	LL_FOREACH(_subscriptions, sub) {
-		if (sub->get_topic() == topic) {
+		if (sub->get_topic() == topic && sub->get_instance() == instance) {
 			/* already subscribed */
 			return sub;
 		}
 	}
 
 	/* add new subscription */
-	MavlinkOrbSubscription *sub_new = new MavlinkOrbSubscription(topic);
+	MavlinkOrbSubscription *sub_new = new MavlinkOrbSubscription(topic, instance);
 
 	LL_APPEND(_subscriptions, sub_new);
 
@@ -946,7 +947,6 @@ Mavlink::configure_stream(const char *stream_name, const float rate)
 				/* delete stream */
 				LL_DELETE(_streams, stream);
 				delete stream;
-				warnx("deleted stream %s", stream->get_name());
 			}
 
 			return OK;
@@ -1027,6 +1027,8 @@ Mavlink::configure_stream_threadsafe(const char *stream_name, const float rate)
 		do {
 			usleep(MAIN_LOOP_DELAY / 2);
 		} while (_subscribe_to_stream != nullptr);
+
+		delete s;
 	}
 }
 
@@ -1285,30 +1287,11 @@ Mavlink::task_main(int argc, char *argv[])
 	}
 
 	if (Mavlink::instance_exists(_device_name, this)) {
-		warnx("mavlink instance for %s already running", _device_name);
+		warnx("%s already running", _device_name);
 		return ERROR;
 	}
 
-	/* inform about mode */
-	switch (_mode) {
-	case MAVLINK_MODE_NORMAL:
-		warnx("mode: NORMAL");
-		break;
-
-	case MAVLINK_MODE_CUSTOM:
-		warnx("mode: CUSTOM");
-		break;
-
-	case MAVLINK_MODE_ONBOARD:
-		warnx("mode: ONBOARD");
-		break;
-
-	default:
-		warnx("ERROR: Unknown mode");
-		break;
-	}
-
-	warnx("data rate: %d Bytes/s, port: %s, baud: %d", _datarate, _device_name, _baudrate);
+	warnx("mode: %u, data rate: %d B/s on %s @ %dB", _mode, _datarate, _device_name, _baudrate);
 
 	/* flush stdout in case MAVLink is about to take it over */
 	fflush(stdout);
@@ -1336,7 +1319,7 @@ Mavlink::task_main(int argc, char *argv[])
 		 * marker ring buffer approach.
 		 */
 		if (OK != message_buffer_init(2 * sizeof(mavlink_message_t) + 1)) {
-			errx(1, "can't allocate message buffer, exiting");
+			errx(1, "msg buf:");
 		}
 
 		/* initialize message buffer mutex */
@@ -1378,7 +1361,7 @@ Mavlink::task_main(int argc, char *argv[])
 
 	/* PARAM_VALUE stream */
 	_parameters_manager = (MavlinkParametersManager *) MavlinkParametersManager::new_instance(this);
-	_parameters_manager->set_interval(interval_from_rate(30.0f));
+	_parameters_manager->set_interval(interval_from_rate(120.0f));
 	LL_APPEND(_streams, _parameters_manager);
 
 	/* MISSION_STREAM stream, actually sends all MISSION_XXX messages at some rate depending on
@@ -1403,17 +1386,24 @@ Mavlink::task_main(int argc, char *argv[])
 		configure_stream("POSITION_TARGET_GLOBAL_INT", 3.0f);
 		configure_stream("ATTITUDE_TARGET", 3.0f);
 		configure_stream("DISTANCE_SENSOR", 0.5f);
-		configure_stream("OPTICAL_FLOW", 5.0f);
+		configure_stream("OPTICAL_FLOW_RAD", 5.0f);
 		break;
 
 	case MAVLINK_MODE_ONBOARD:
 		configure_stream("SYS_STATUS", 1.0f);
 		configure_stream("ATTITUDE", 50.0f);
 		configure_stream("GLOBAL_POSITION_INT", 50.0f);
+		configure_stream("LOCAL_POSITION_NED", 30.0f);
 		configure_stream("CAMERA_CAPTURE", 2.0f);
 		configure_stream("ATTITUDE_TARGET", 10.0f);
 		configure_stream("POSITION_TARGET_GLOBAL_INT", 10.0f);
+		configure_stream("POSITION_TARGET_LOCAL_NED", 10.0f);
+		configure_stream("DISTANCE_SENSOR", 10.0f);
+		configure_stream("OPTICAL_FLOW_RAD", 10.0f);
 		configure_stream("VFR_HUD", 10.0f);
+		configure_stream("SYSTEM_TIME", 1.0f);
+		configure_stream("TIMESYNC", 10.0f);
+		configure_stream("ACTUATOR_CONTROL_TARGET0", 10.0f);
 		break;
 
 	default:
@@ -1443,7 +1433,7 @@ Mavlink::task_main(int argc, char *argv[])
 
 		if (status_sub->update(&status_time, &status)) {
 			/* switch HIL mode if required */
-			set_hil_enabled(status.hil_state == HIL_STATE_ON);
+			set_hil_enabled(status.hil_state == vehicle_status_s::HIL_STATE_ON);
 		}
 
 		/* check for requested subscriptions */
@@ -1461,7 +1451,6 @@ Mavlink::task_main(int argc, char *argv[])
 				warnx("stream %s on device %s not found", _subscribe_to_stream, _device_name);
 			}
 
-			delete _subscribe_to_stream;
 			_subscribe_to_stream = nullptr;
 		}
 
@@ -1564,8 +1553,6 @@ Mavlink::task_main(int argc, char *argv[])
 
 	_subscriptions = nullptr;
 
-	warnx("waiting for UART receive thread");
-
 	/* wait for threads to complete */
 	pthread_join(_receive_thread, NULL);
 
@@ -1634,9 +1621,9 @@ Mavlink::start(int argc, char *argv[])
 	task_spawn_cmd(buf,
 		       SCHED_DEFAULT,
 		       SCHED_PRIORITY_DEFAULT,
-		       2700,
+		       2400,
 		       (main_t)&Mavlink::start_helper,
-		       (const char **)argv);
+		       (char * const *)argv);
 
 	// Ensure that this shell command
 	// does not return before the instance
