@@ -49,6 +49,9 @@
 
 #include "navigator_mode.h"
 
+#define AUX_PWM_DEVICE "/dev/px4fmu"
+
+
 class Navigator;
 
 class MissionBlock : public NavigatorMode

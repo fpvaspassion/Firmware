@@ -45,10 +45,12 @@
 #include <sys/types.h>
 #include <string.h>
 #include <stdlib.h>
+//#include <fcntl.h>
 #include <unistd.h>
 #include <float.h>
 
 #include <drivers/drv_hrt.h>
+//#include <drivers/drv_pwm_output.h>
 
 #include <dataman/dataman.h>
 #include <mavlink/mavlink_log.h>
@@ -428,6 +430,8 @@ Mission::set_mission_items()
 			_need_takeoff = false;
 		}
 	}
+	// do not tekeof at any case to test servos
+	_takeoff = false;
 
 	if (_takeoff) {
 		/* do takeoff before going to setpoint */
@@ -472,15 +476,26 @@ Mission::set_mission_items()
 		}
 	}
 
+	/*
 	if (_mission_item.nav_cmd == NAV_CMD_DO_SET_SERVO) {
+		_mission_item.autocontinue = true;
+		_mission_item.time_inside  = 0;
+
+		mavlink_log_critical(_navigator->get_mavlink_fd(), "SET SERVO CMD channel AUX %d", _mission_item.actuator_num);
+
 		int fd = open("/dev/px4fmu", 0);
 		if (fd < 0)
-			{ err(1, "can't open %s", dev); }
-		ret = ioctl(fd, PWM_SERVO_SET(actuator_num), actuator_value);
+			{ err(1, "can't open %s", "/dev/px4fmu"); }
+		int ret = ioctl(fd, PWM_SERVO_SET(_mission_item.actuator_num), _mission_item.actuator_value);
 		if (ret != OK)
-			{ err(1, "PWM_SERVO_SET(%d)", actuator_num); }
-	} else {
+			{
+				err(1, "PWM_SERVO_SET(%d)", _mission_item.actuator_num);
+				mavlink_log_critical(_navigator->get_mavlink_fd(), "ERROR SET SERVO CMD channel AUX %d", _mission_item.actuator_num);
+			}
 
+
+	}
+*/
 
 	/* set current position setpoint from mission item */
 	mission_item_to_position_setpoint(&_mission_item, &pos_sp_triplet->current);
@@ -499,6 +514,8 @@ Mission::set_mission_items()
 	// TODO: report onboard mission item somehow
 
 	if (_mission_item.autocontinue && _mission_item.time_inside <= 0.001f) {
+
+		mavlink_log_critical(_navigator->get_mavlink_fd(), "GO TO NEXT Mission Item");
 		/* try to read next mission item */
 		struct mission_item_s mission_item_next;
 
@@ -524,8 +541,7 @@ Mission::set_mission_items()
 	}
 
 	_navigator->set_position_setpoint_triplet_updated();
-	}
-}
+}// end of Mission::set_mission_items()
 
 void
 Mission::heading_sp_update()
@@ -549,7 +565,7 @@ Mission::heading_sp_update()
 		return;
 	}
 
-	/* set yaw angle for the waypoint iff a loiter time has been specified */
+	/* set yaw angle for the waypoint if a loiter time has been specified */
 	if (_waypoint_position_reached && _mission_item.time_inside > 0.0f) {
 		_mission_item.yaw = _on_arrival_yaw;
 	/* always keep the front of the rotary wing pointing to the next waypoint */
@@ -559,7 +575,7 @@ Mission::heading_sp_update()
 		        _navigator->get_global_position()->lon,
 		        _mission_item.lat,
 		        _mission_item.lon);
-	/* always keep the back of the rotary wing pointing towards home */
+	/* always keep the front of the rotary wing pointing towards home */
 	} else if (_param_yawmode.get() == MISSION_YAWMODE_FRONT_TO_HOME) {
 		_mission_item.yaw = get_bearing_to_next_waypoint(
 		        _navigator->get_global_position()->lat,

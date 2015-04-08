@@ -52,6 +52,10 @@
 #include <uORB/topics/mission.h>
 #include <uORB/topics/mission_result.h>
 
+#include <fcntl.h>
+#include <drivers/drv_pwm_output.h>
+
+
 /* oddly, ERROR is not defined for c++ */
 #ifdef ERROR
 # undef ERROR
@@ -781,12 +785,26 @@ MavlinkMissionManager::parse_mavlink_mission_item(const mavlink_mission_item_t *
 		mission_item->autocontinue = true;
 		mission_item->time_inside=0.0f;
 		_mavlink->send_statustext_info("SET SERVO CMD received");
+
 		break;
 
 	default:
 		mission_item->acceptance_radius = mavlink_mission_item->param2;
 		mission_item->time_inside = mavlink_mission_item->param1;
 		break;
+	}
+
+	if (mavlink_mission_item->command == MAV_CMD_DO_SET_SERVO){
+
+		int pwm_fd = open(MAV_AUX_PWM_DEVICE, 0);
+		if (pwm_fd < 0) _mavlink->send_statustext_info("can't open PWM device");
+
+		_mavlink->send_statustext_info("SETTING value for AUX");
+		int ret = ioctl(pwm_fd, PWM_SERVO_SET(mission_item->actuator_num), mission_item->actuator_value);
+
+		if (ret != OK) _mavlink->send_statustext_info("ERROR SET SERVO CMD channel");
+		if (pwm_fd > 0) close(pwm_fd);
+
 	}
 
 	mission_item->yaw = _wrap_pi(mavlink_mission_item->param4 * M_DEG_TO_RAD_F);
@@ -818,6 +836,11 @@ MavlinkMissionManager::format_mavlink_mission_item(const struct mission_item_s *
 	switch (mission_item->nav_cmd) {
 	case NAV_CMD_TAKEOFF:
 		mavlink_mission_item->param1 = mission_item->pitch_min;
+		break;
+
+	case NAV_CMD_DO_SET_SERVO:
+		mavlink_mission_item->param1 = mission_item->actuator_num;
+		mavlink_mission_item->param2 = mission_item->actuator_value;
 		break;
 
 	case NAV_CMD_DO_JUMP:

@@ -45,6 +45,9 @@
 #include <math.h>
 #include <float.h>
 
+#include <fcntl.h>
+#include <drivers/drv_pwm_output.h>
+
 #include <systemlib/err.h>
 #include <geo/geo.h>
 #include <mavlink/mavlink_log.h>
@@ -71,6 +74,32 @@ MissionBlock::~MissionBlock()
 bool
 MissionBlock::is_mission_item_reached()
 {
+	if (_mission_item.nav_cmd == NAV_CMD_DO_SET_SERVO) {
+
+		_mission_item.autocontinue = true;
+		_mission_item.time_inside  = 0;
+
+		mavlink_log_critical(_navigator->get_mavlink_fd(), "SET SERVO CMD channel AUX %d", _mission_item.actuator_num);
+
+		int pwm_fd = open(AUX_PWM_DEVICE, 0);
+		if (pwm_fd < 0)
+			{
+			err(1, "can't open %s", AUX_PWM_DEVICE);
+			mavlink_log_critical(_navigator->get_mavlink_fd(), "can't open %s", AUX_PWM_DEVICE);
+			}
+		int ret = ioctl(pwm_fd, PWM_SERVO_SET(_mission_item.actuator_num), _mission_item.actuator_value);
+		if (ret != OK)
+			{
+				err(1, "ERROR with PWM_SERVO_SET(%d)", _mission_item.actuator_num);
+				mavlink_log_critical(_navigator->get_mavlink_fd(), "ERROR SET SERVO CMD channel AUX %d", _mission_item.actuator_num);
+			}
+
+		if (pwm_fd > 0) close (pwm_fd);
+
+
+		return true;
+	}
+
 	if (_mission_item.nav_cmd == NAV_CMD_IDLE) {
 		return false;
 	}
