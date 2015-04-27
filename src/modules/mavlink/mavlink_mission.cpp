@@ -784,11 +784,6 @@ MavlinkMissionManager::parse_mavlink_mission_item(const mavlink_mission_item_t *
 		mission_item->actuator_value = mavlink_mission_item->param2;
 		mission_item->autocontinue = true;
 		mission_item->time_inside=0.0f;
-		_mavlink->send_statustext_info("SET SERVO CMD received");
-		//up_pwm_servo_arm(true);
-		//up_pwm_servo_set(mission_item->actuator_num, mission_item->actuator_value);
-
-
 		break;
 
 	default:
@@ -797,21 +792,6 @@ MavlinkMissionManager::parse_mavlink_mission_item(const mavlink_mission_item_t *
 		break;
 	}
 
-	if (mavlink_mission_item->command == MAV_CMD_DO_SET_SERVO){
-
-		up_pwm_servo_arm(true);
-		up_pwm_servo_set(mission_item->actuator_num-1, mission_item->actuator_value);
-
-		/*
-		int pwm_fd = open(MAV_AUX_PWM_DEVICE, 0);
-		if (pwm_fd < 0) _mavlink->send_statustext_info("can't open PWM device");
-		_mavlink->send_statustext_info("SETTING value for AUX");
-		int ret = ioctl(pwm_fd, PWM_SERVO_SET(mission_item->actuator_num-1 ), mission_item->actuator_value);
-		if (ret != OK) _mavlink->send_statustext_info("ERROR SET SERVO CMD channel");
-		if (pwm_fd > 0) close(pwm_fd);
-		*/
-
-	}
 
 	mission_item->yaw = _wrap_pi(mavlink_mission_item->param4 * M_DEG_TO_RAD_F);
 	mission_item->loiter_radius = fabsf(mavlink_mission_item->param3);
