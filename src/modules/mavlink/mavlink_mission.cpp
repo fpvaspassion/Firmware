@@ -52,6 +52,10 @@
 #include <uORB/topics/mission.h>
 #include <uORB/topics/mission_result.h>
 
+#include <fcntl.h>
+#include <drivers/drv_pwm_output.h>
+
+
 /* oddly, ERROR is not defined for c++ */
 #ifdef ERROR
 # undef ERROR
@@ -773,11 +777,21 @@ MavlinkMissionManager::parse_mavlink_mission_item(const mavlink_mission_item_t *
 		mission_item->do_jump_current_count = 0;
 		mission_item->do_jump_repeat_count = mavlink_mission_item->param2;
 		break;
+
+
+	case MAV_CMD_DO_SET_SERVO:
+		mission_item->actuator_num = mavlink_mission_item->param1;
+		mission_item->actuator_value = mavlink_mission_item->param2;
+		mission_item->autocontinue = true;
+		mission_item->time_inside=0.0f;
+		break;
+
 	default:
 		mission_item->acceptance_radius = mavlink_mission_item->param2;
 		mission_item->time_inside = mavlink_mission_item->param1;
 		break;
 	}
+
 
 	mission_item->yaw = _wrap_pi(mavlink_mission_item->param4 * M_DEG_TO_RAD_F);
 	mission_item->loiter_radius = fabsf(mavlink_mission_item->param3);
@@ -808,6 +822,11 @@ MavlinkMissionManager::format_mavlink_mission_item(const struct mission_item_s *
 	switch (mission_item->nav_cmd) {
 	case NAV_CMD_TAKEOFF:
 		mavlink_mission_item->param1 = mission_item->pitch_min;
+		break;
+
+	case NAV_CMD_DO_SET_SERVO:
+		mavlink_mission_item->param1 = mission_item->actuator_num;
+		mavlink_mission_item->param2 = mission_item->actuator_value;
 		break;
 
 	case NAV_CMD_DO_JUMP:

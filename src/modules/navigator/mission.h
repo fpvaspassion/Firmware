@@ -118,8 +118,13 @@ private:
 	void set_mission_items();
 
 	/**
-	 * Updates the heading of the vehicle. Rotary wings only.
+	 * Check if the mission item is not new waypoint
 	 */
+	bool is_nonnavigation_item();
+
+	/**
+	* Updates the heading of the vehicle. Rotary wings only.
+	*/
 	void heading_sp_update();
 
 	/**

@@ -118,6 +118,9 @@ public:
 	 */
 	void publish_att_sp();
 
+
+	bool is_nonnavigation_item();
+
 	/**
 	 * Setters
 	 */
@@ -145,7 +148,7 @@ public:
 	bool		get_can_loiter_at_sp() { return _can_loiter_at_sp; }
 	float		get_loiter_radius() { return _param_loiter_radius.get(); }
 	float		get_acceptance_radius() { return _param_acceptance_radius.get(); }
-	int		get_mavlink_fd() { return _mavlink_fd; }
+	int			get_mavlink_fd() { return _mavlink_fd; }
 
 private:
 
