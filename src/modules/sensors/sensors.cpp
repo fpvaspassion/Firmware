@@ -46,7 +46,12 @@
  * @author Anton Babushkin <anton@px4.io>
  */
 
-#include <nuttx/config.h>
+#include <board_config.h>
+
+#include <px4_config.h>
+#include <px4_tasks.h>
+#include <px4_posix.h>
+#include <px4_time.h>
 
 #include <fcntl.h>
 #include <poll.h>
@@ -59,7 +64,8 @@
 #include <math.h>
 #include <mathlib/mathlib.h>
 
-#include <nuttx/analog/adc.h>
+#include <px4_adc.h>
+//#include <nuttx/analog/adc.h>
 
 #include <drivers/drv_hrt.h>
 #include <drivers/drv_accel.h>
@@ -107,29 +113,13 @@
  * IO:
  * IN4 - servo supply rail
  * IN5 - analog RSSI
+ *
+ * The channel definitions (e.g., ADC_BATTERY_VOLTAGE_CHANNEL, ADC_BATTERY_CURRENT_CHANNEL, and ADC_AIRSPEED_VOLTAGE_CHANNEL) are defined in board_config.h
  */
 
-#ifdef CONFIG_ARCH_BOARD_PX4FMU_V1
-#define ADC_BATTERY_VOLTAGE_CHANNEL	10
-#define ADC_BATTERY_CURRENT_CHANNEL	-1
-#define ADC_AIRSPEED_VOLTAGE_CHANNEL	11
-#endif
-
-#ifdef CONFIG_ARCH_BOARD_PX4FMU_V2
-#define ADC_BATTERY_VOLTAGE_CHANNEL	2
-#define ADC_BATTERY_CURRENT_CHANNEL	3
-#define ADC_5V_RAIL_SENSE		4
-#define ADC_AIRSPEED_VOLTAGE_CHANNEL	15
-#endif
-
-#ifdef CONFIG_ARCH_BOARD_AEROCORE
-#define ADC_BATTERY_VOLTAGE_CHANNEL	10
-#define ADC_BATTERY_CURRENT_CHANNEL	-1
-#define ADC_AIRSPEED_VOLTAGE_CHANNEL	-1
-#endif
 
 #define BATT_V_LOWPASS			0.001f
-#define BATT_V_IGNORE_THRESHOLD		4.8f
+#define BATT_V_IGNORE_THRESHOLD		2.5f
 
 /**
  * HACK - true temperature is much less than indicated temperature in baro,
@@ -223,7 +213,7 @@ private:
 	int 		_rc_sub;			/**< raw rc channels data subscription */
 	int		_baro_sub;			/**< raw baro data subscription */
 	int		_baro1_sub;			/**< raw baro data subscription */
-	int		_airspeed_sub;			/**< airspeed subscription */
+	//int		_airspeed_sub;			/**< airspeed subscription */
 	int		_diff_pres_sub;			/**< raw differential pressure subscription */
 	int		_vcontrol_mode_sub;			/**< vehicle control mode subscription */
 	int 		_params_sub;			/**< notification of parameter updates */
@@ -513,13 +503,13 @@ Sensors::Sensors() :
 	_manual_control_sub(-1),
 
 	/* publications */
-	_sensor_pub(-1),
-	_manual_control_pub(-1),
-	_actuator_group_3_pub(-1),
-	_rc_pub(-1),
-	_battery_pub(-1),
-	_airspeed_pub(-1),
-	_diff_pres_pub(-1),
+	_sensor_pub(nullptr),
+	_manual_control_pub(nullptr),
+	_actuator_group_3_pub(nullptr),
+	_rc_pub(nullptr),
+	_battery_pub(nullptr),
+	_airspeed_pub(nullptr),
+	_diff_pres_pub(nullptr),
 
 	/* performance counters */
 	_loop_perf(perf_alloc(PC_ELAPSED, "sensor task update")),
@@ -633,6 +623,14 @@ Sensors::Sensors() :
 	(void)param_find("CAL_MAG1_ROT");
 	(void)param_find("CAL_MAG2_ROT");
 	(void)param_find("SYS_PARAM_VER");
+	(void)param_find("SYS_AUTOSTART");
+	(void)param_find("SYS_AUTOCONFIG");
+	(void)param_find("PWM_MIN");
+	(void)param_find("PWM_MAX");
+	(void)param_find("PWM_DISARMED");
+	(void)param_find("PWM_AUX_MIN");
+	(void)param_find("PWM_AUX_MAX");
+	(void)param_find("PWM_AUX_DISARMED");
 	
 	/* fetch initial parameter values */
 	parameters_update();
@@ -654,7 +652,7 @@ Sensors::~Sensors()
 
 			/* if we have given up, kill it */
 			if (++i > 50) {
-				task_delete(_sensors_task);
+				px4_task_delete(_sensors_task);
 				break;
 			}
 		} while (_sensors_task != -1);
@@ -683,7 +681,7 @@ Sensors::parameters_update()
 		tmpRevFactor = tmpScaleFactor * _parameters.rev[i];
 
 		/* handle blowup in the scaling factor calculation */
-		if (!isfinite(tmpScaleFactor) ||
+		if (!PX4_ISFINITE(tmpScaleFactor) ||
 		    (tmpRevFactor < 0.000001f) ||
 		    (tmpRevFactor > 0.2f)) {
 			warnx("RC chan %u not sane, scaling: %8.6f, rev: %d", i, (double)tmpScaleFactor, (int)(_parameters.rev[i]));
@@ -829,18 +827,18 @@ Sensors::parameters_update()
 
 	/* set px4flow rotation */
 	int	flowfd;
-	flowfd = open(PX4FLOW0_DEVICE_PATH, 0);
+	flowfd = px4_open(PX4FLOW0_DEVICE_PATH, 0);
 
 	if (flowfd >= 0) {
-		int flowret = ioctl(flowfd, SENSORIOCSROTATION, _parameters.flow_rotation);
+		int flowret = px4_ioctl(flowfd, SENSORIOCSROTATION, _parameters.flow_rotation);
 
 		if (flowret) {
 			warnx("flow rotation could not be set");
-			close(flowfd);
+			px4_close(flowfd);
 			return ERROR;
 		}
 
-		close(flowfd);
+		px4_close(flowfd);
 	}
 
 	get_rot_matrix((enum Rotation)_parameters.board_rotation, &_board_rotation);
@@ -855,27 +853,27 @@ Sensors::parameters_update()
 					 M_DEG_TO_RAD_F * _parameters.board_offset[1],
 					 M_DEG_TO_RAD_F * _parameters.board_offset[2]);
 
-	_board_rotation = _board_rotation * board_rotation_offset;
+	_board_rotation = board_rotation_offset * _board_rotation;
 
 	/* update barometer qnh setting */
 	param_get(_parameter_handles.baro_qnh, &(_parameters.baro_qnh));
 	int	barofd;
-	barofd = open(BARO0_DEVICE_PATH, 0);
+	barofd = px4_open(BARO0_DEVICE_PATH, 0);
 
 	if (barofd < 0) {
-		warnx("ERROR: no barometer foundon %s", BARO0_DEVICE_PATH);
+		warnx("ERROR: no barometer found on %s", BARO0_DEVICE_PATH);
 		return ERROR;
 
 	} else {
-		int baroret = ioctl(barofd, BAROIOCSMSLPRESSURE, (unsigned long)(_parameters.baro_qnh * 100));
+		int baroret = px4_ioctl(barofd, BAROIOCSMSLPRESSURE, (unsigned long)(_parameters.baro_qnh * 100));
 
 		if (baroret) {
 			warnx("qnh could not be set");
-			close(barofd);
+			px4_close(barofd);
 			return ERROR;
 		}
 
-		close(barofd);
+		px4_close(barofd);
 	}
 
 	return OK;
@@ -886,7 +884,7 @@ Sensors::accel_init()
 {
 	int	fd;
 
-	fd = open(ACCEL0_DEVICE_PATH, 0);
+	fd = px4_open(ACCEL0_DEVICE_PATH, 0);
 
 	if (fd < 0) {
 		warnx("FATAL: no accelerometer found: %s", ACCEL0_DEVICE_PATH);
@@ -895,12 +893,12 @@ Sensors::accel_init()
 	} else {
 
 		/* set the accel internal sampling rate to default rate */
-		ioctl(fd, ACCELIOCSSAMPLERATE, ACCEL_SAMPLERATE_DEFAULT);
+		px4_ioctl(fd, ACCELIOCSSAMPLERATE, ACCEL_SAMPLERATE_DEFAULT);
 
 		/* set the driver to poll at default rate */
-		ioctl(fd, SENSORIOCSPOLLRATE, SENSOR_POLLRATE_DEFAULT);
+		px4_ioctl(fd, SENSORIOCSPOLLRATE, SENSOR_POLLRATE_DEFAULT);
 
-		close(fd);
+		px4_close(fd);
 	}
 
 	return OK;
@@ -911,21 +909,21 @@ Sensors::gyro_init()
 {
 	int	fd;
 
-	fd = open(GYRO0_DEVICE_PATH, 0);
+	fd = px4_open(GYRO0_DEVICE_PATH, 0);
 
 	if (fd < 0) {
 		warnx("FATAL: no gyro found: %s", GYRO0_DEVICE_PATH);
 		return ERROR;
 
-	} else {
-
-		/* set the gyro internal sampling rate to default rate */
-		ioctl(fd, GYROIOCSSAMPLERATE, GYRO_SAMPLERATE_DEFAULT);
-
-		/* set the driver to poll at default rate */
-		ioctl(fd, SENSORIOCSPOLLRATE, SENSOR_POLLRATE_DEFAULT);
-
 	}
+
+	/* set the gyro internal sampling rate to default rate */
+	px4_ioctl(fd, GYROIOCSSAMPLERATE, GYRO_SAMPLERATE_DEFAULT);
+
+	/* set the driver to poll at default rate */
+	px4_ioctl(fd, SENSORIOCSPOLLRATE, SENSOR_POLLRATE_DEFAULT);
+
+	px4_close(fd);
 
 	return OK;
 }
@@ -936,7 +934,7 @@ Sensors::mag_init()
 	int	fd;
 	int	ret;
 
-	fd = open(MAG0_DEVICE_PATH, 0);
+	fd = px4_open(MAG0_DEVICE_PATH, 0);
 
 	if (fd < 0) {
 		warnx("FATAL: no magnetometer found: %s", MAG0_DEVICE_PATH);
@@ -946,19 +944,19 @@ Sensors::mag_init()
 	/* try different mag sampling rates */
 
 
-	ret = ioctl(fd, MAGIOCSSAMPLERATE, 150);
+	ret = px4_ioctl(fd, MAGIOCSSAMPLERATE, 150);
 
 	if (ret == OK) {
 		/* set the pollrate accordingly */
-		ioctl(fd, SENSORIOCSPOLLRATE, 150);
+		px4_ioctl(fd, SENSORIOCSPOLLRATE, 150);
 
 	} else {
-		ret = ioctl(fd, MAGIOCSSAMPLERATE, 100);
+		ret = px4_ioctl(fd, MAGIOCSSAMPLERATE, 100);
 
 		/* if the slower sampling rate still fails, something is wrong */
 		if (ret == OK) {
 			/* set the driver to poll also at the slower rate */
-			ioctl(fd, SENSORIOCSPOLLRATE, 100);
+			px4_ioctl(fd, SENSORIOCSPOLLRATE, 100);
 
 		} else {
 			warnx("FATAL: mag sampling rate could not be set");
@@ -966,7 +964,7 @@ Sensors::mag_init()
 		}
 	}
 
-	close(fd);
+	px4_close(fd);
 
 	return OK;
 }
@@ -976,7 +974,7 @@ Sensors::baro_init()
 {
 	int	fd;
 
-	fd = open(BARO0_DEVICE_PATH, 0);
+	fd = px4_open(BARO0_DEVICE_PATH, 0);
 
 	if (fd < 0) {
 		warnx("FATAL: No barometer found: %s", BARO0_DEVICE_PATH);
@@ -984,9 +982,9 @@ Sensors::baro_init()
 	}
 
 	/* set the driver to poll at 150Hz */
-	ioctl(fd, SENSORIOCSPOLLRATE, 150);
+	px4_ioctl(fd, SENSORIOCSPOLLRATE, 150);
 
-	close(fd);
+	px4_close(fd);
 
 	return OK;
 }
@@ -995,7 +993,7 @@ int
 Sensors::adc_init()
 {
 
-	_fd_adc = open(ADC0_DEVICE_PATH, O_RDONLY | O_NONBLOCK);
+	_fd_adc = px4_open(ADC0_DEVICE_PATH, O_RDONLY | O_NONBLOCK);
 
 	if (_fd_adc < 0) {
 		warnx("FATAL: no ADC found: %s", ADC0_DEVICE_PATH);
@@ -1287,10 +1285,14 @@ Sensors::diff_pres_poll(struct sensor_combined_s &raw)
 		_airspeed.true_airspeed_m_s = math::max(0.0f,
 							calc_true_airspeed(_diff_pres.differential_pressure_filtered_pa + raw.baro_pres_mbar * 1e2f,
 									raw.baro_pres_mbar * 1e2f, air_temperature_celsius));
+		_airspeed.true_airspeed_unfiltered_m_s = math::max(0.0f,
+							calc_true_airspeed(_diff_pres.differential_pressure_raw_pa + raw.baro_pres_mbar * 1e2f,
+								raw.baro_pres_mbar * 1e2f, air_temperature_celsius));
+
 		_airspeed.air_temperature_celsius = air_temperature_celsius;
 
 		/* announce the airspeed if needed, just publish else */
-		if (_airspeed_pub > 0) {
+		if (_airspeed_pub != nullptr) {
 			orb_publish(ORB_ID(airspeed), _airspeed_pub, &_airspeed);
 
 		} else {
@@ -1357,7 +1359,7 @@ Sensors::parameter_update_poll(bool forced)
 			res = ERROR;
 			(void)sprintf(str, "%s%u", GYRO_BASE_DEVICE_PATH, s);
 
-			int fd = open(str, 0);
+			int fd = px4_open(str, 0);
 
 			if (fd < 0) {
 				continue;
@@ -1375,12 +1377,12 @@ Sensors::parameter_update_poll(bool forced)
 				failed = failed || (OK != param_get(param_find(str), &device_id));
 
 				if (failed) {
-					close(fd);
+					px4_close(fd);
 					continue;
 				}
 
 				/* if the calibration is for this device, apply it */
-				if (device_id == ioctl(fd, DEVIOCGDEVICEID, 0)) {
+				if (device_id == px4_ioctl(fd, DEVIOCGDEVICEID, 0)) {
 					struct gyro_scale gscale = {};
 					(void)sprintf(str, "CAL_GYRO%u_XOFF", i);
 					failed = failed || (OK != param_get(param_find(str), &gscale.x_offset));
@@ -1399,7 +1401,7 @@ Sensors::parameter_update_poll(bool forced)
 						warnx(CAL_ERROR_APPLY_CAL_MSG, "gyro", i);
 					} else {
 						/* apply new scaling and offsets */
-						res = ioctl(fd, GYROIOCSSCALE, (long unsigned int)&gscale);
+						res = px4_ioctl(fd, GYROIOCSSCALE, (long unsigned int)&gscale);
 						if (res) {
 							warnx(CAL_ERROR_APPLY_CAL_MSG, "gyro", i);
 						} else {
@@ -1414,7 +1416,7 @@ Sensors::parameter_update_poll(bool forced)
 				gyro_count++;
 			}
 
-			close(fd);
+			px4_close(fd);
 		}
 
 		/* run through all accel sensors */
@@ -1423,7 +1425,7 @@ Sensors::parameter_update_poll(bool forced)
 			res = ERROR;
 			(void)sprintf(str, "%s%u", ACCEL_BASE_DEVICE_PATH, s);
 
-			int fd = open(str, 0);
+			int fd = px4_open(str, 0);
 
 			if (fd < 0) {
 				continue;
@@ -1441,12 +1443,12 @@ Sensors::parameter_update_poll(bool forced)
 				failed = failed || (OK != param_get(param_find(str), &device_id));
 
 				if (failed) {
-					close(fd);
+					px4_close(fd);
 					continue;
 				}
 
 				/* if the calibration is for this device, apply it */
-				if (device_id == ioctl(fd, DEVIOCGDEVICEID, 0)) {
+				if (device_id == px4_ioctl(fd, DEVIOCGDEVICEID, 0)) {
 					struct accel_scale gscale = {};
 					(void)sprintf(str, "CAL_ACC%u_XOFF", i);
 					failed = failed || (OK != param_get(param_find(str), &gscale.x_offset));
@@ -1465,7 +1467,7 @@ Sensors::parameter_update_poll(bool forced)
 						warnx(CAL_ERROR_APPLY_CAL_MSG, "accel", i);
 					} else {
 						/* apply new scaling and offsets */
-						res = ioctl(fd, ACCELIOCSSCALE, (long unsigned int)&gscale);
+						res = px4_ioctl(fd, ACCELIOCSSCALE, (long unsigned int)&gscale);
 						if (res) {
 							warnx(CAL_ERROR_APPLY_CAL_MSG, "accel", i);
 						} else {
@@ -1480,7 +1482,7 @@ Sensors::parameter_update_poll(bool forced)
 				accel_count++;
 			}
 
-			close(fd);
+			px4_close(fd);
 		}
 
 		/* run through all mag sensors */
@@ -1489,7 +1491,7 @@ Sensors::parameter_update_poll(bool forced)
 			res = ERROR;
 			(void)sprintf(str, "%s%u", MAG_BASE_DEVICE_PATH, s);
 
-			int fd = open(str, 0);
+			int fd = px4_open(str, 0);
 
 			if (fd < 0) {
 				/* the driver is not running, abort */
@@ -1514,12 +1516,12 @@ Sensors::parameter_update_poll(bool forced)
 				failed = failed || (OK != param_get(param_find(str), &device_id));
 
 				if (failed) {
-					close(fd);
+					px4_close(fd);
 					continue;
 				}
 
 				/* if the calibration is for this device, apply it */
-				if (device_id == ioctl(fd, DEVIOCGDEVICEID, 0)) {
+				if (device_id == px4_ioctl(fd, DEVIOCGDEVICEID, 0)) {
 					struct mag_scale gscale = {};
 					(void)sprintf(str, "CAL_MAG%u_XOFF", i);
 					failed = failed || (OK != param_get(param_find(str), &gscale.x_offset));
@@ -1536,7 +1538,7 @@ Sensors::parameter_update_poll(bool forced)
 
 					(void)sprintf(str, "CAL_MAG%u_ROT", i);
 
-					if (ioctl(fd, MAGIOCGEXTERNAL, 0) <= 0) {
+					if (px4_ioctl(fd, MAGIOCGEXTERNAL, 0) <= 0) {
 						/* mag is internal */
 						_mag_rotation[s] = _board_rotation;
 						/* reset param to -1 to indicate internal mag */
@@ -1588,7 +1590,7 @@ Sensors::parameter_update_poll(bool forced)
 						warnx(CAL_ERROR_APPLY_CAL_MSG, "mag", i);
 					} else {
 						/* apply new scaling and offsets */
-						res = ioctl(fd, MAGIOCSSCALE, (long unsigned int)&gscale);
+						res = px4_ioctl(fd, MAGIOCSSCALE, (long unsigned int)&gscale);
 						if (res) {
 							warnx(CAL_ERROR_APPLY_CAL_MSG, "mag", i);
 						} else {
@@ -1603,10 +1605,10 @@ Sensors::parameter_update_poll(bool forced)
 				mag_count++;
 			}
 
-			close(fd);
+			px4_close(fd);
 		}
 
-		int fd = open(AIRSPEED0_DEVICE_PATH, 0);
+		int fd = px4_open(AIRSPEED0_DEVICE_PATH, 0);
 
 		/* this sensor is optional, abort without error */
 
@@ -1616,11 +1618,11 @@ Sensors::parameter_update_poll(bool forced)
 				1.0f,
 			};
 
-			if (OK != ioctl(fd, AIRSPEEDIOCSSCALE, (long unsigned int)&airscale)) {
+			if (OK != px4_ioctl(fd, AIRSPEEDIOCSSCALE, (long unsigned int)&airscale)) {
 				warn("WARNING: failed to set scale / offsets for airspeed sensor");
 			}
 
-			close(fd);
+			px4_close(fd);
 		}
 
 		/* do not output this for now, as its covered in preflight checks */
@@ -1686,7 +1688,7 @@ Sensors::adc_poll(struct sensor_combined_s &raw)
 		/* make space for a maximum of twelve channels (to ensure reading all channels at once) */
 		struct adc_msg_s buf_adc[12];
 		/* read all channels available */
-		int ret = read(_fd_adc, &buf_adc, sizeof(buf_adc));
+		int ret = px4_read(_fd_adc, &buf_adc, sizeof(buf_adc));
 
 		if (ret >= (int)sizeof(buf_adc[0])) {
 
@@ -1765,7 +1767,7 @@ Sensors::adc_poll(struct sensor_combined_s &raw)
 						_diff_pres.temperature = -1000.0f;
 
 						/* announce the airspeed if needed, just publish else */
-						if (_diff_pres_pub > 0) {
+						if (_diff_pres_pub != nullptr) {
 							orb_publish(ORB_ID(differential_pressure), _diff_pres_pub, &_diff_pres);
 
 						} else {
@@ -1779,7 +1781,7 @@ Sensors::adc_poll(struct sensor_combined_s &raw)
 
 			if (_battery_status.voltage_filtered_v > BATT_V_IGNORE_THRESHOLD) {
 				/* announce the battery status if needed, just publish else */
-				if (_battery_pub > 0) {
+				if (_battery_pub != nullptr) {
 					orb_publish(ORB_ID(battery_status), _battery_pub, &_battery_status);
 
 				} else {
@@ -1967,7 +1969,7 @@ Sensors::rc_poll()
 			_rc.channels[i] *= _parameters.rev[i];
 
 			/* handle any parameter-induced blowups */
-			if (!isfinite(_rc.channels[i])) {
+			if (!PX4_ISFINITE(_rc.channels[i])) {
 				_rc.channels[i] = 0.0f;
 			}
 		}
@@ -1978,7 +1980,7 @@ Sensors::rc_poll()
 		_rc.timestamp = rc_input.timestamp_last_signal;
 
 		/* publish rc_channels topic even if signal is invalid, for debug */
-		if (_rc_pub > 0) {
+		if (_rc_pub != nullptr) {
 			orb_publish(ORB_ID(rc_channels), _rc_pub, &_rc);
 
 		} else {
@@ -2013,7 +2015,7 @@ Sensors::rc_poll()
 			manual.offboard_switch = get_rc_sw2pos_position (rc_channels_s::RC_CHANNELS_FUNCTION_OFFBOARD, _parameters.rc_offboard_th, _parameters.rc_offboard_inv);
 
 			/* publish manual_control_setpoint topic */
-			if (_manual_control_pub > 0) {
+			if (_manual_control_pub != nullptr) {
 				orb_publish(ORB_ID(manual_control_setpoint), _manual_control_pub, &manual);
 
 			} else {
@@ -2036,7 +2038,7 @@ Sensors::rc_poll()
 			actuator_group_3.control[7] = manual.aux3;
 
 			/* publish actuator_controls_3 topic */
-			if (_actuator_group_3_pub > 0) {
+			if (_actuator_group_3_pub != nullptr) {
 				orb_publish(ORB_ID(actuator_controls_3), _actuator_group_3_pub, &actuator_group_3);
 
 			} else {
@@ -2065,35 +2067,29 @@ Sensors::task_main()
 {
 
 	/* start individual sensors */
-	int ret;
-	ret = accel_init();
+	int ret = 0;
+	do { /* create a scope to handle exit with break */
+		ret = accel_init();
+		if (ret) break;
+		ret = gyro_init();
+		if (ret) break;
+		ret = mag_init();
+		if (ret) break;
+		ret = baro_init();
+		if (ret) break;
+		ret = adc_init();
+		if (ret) break;
+		break;
+	} while (0);
 
 	if (ret) {
-		goto exit_immediate;
-	}
-
-	ret = gyro_init();
-
-	if (ret) {
-		goto exit_immediate;
-	}
-
-	ret = mag_init();
-
-	if (ret) {
-		goto exit_immediate;
-	}
-
-	ret = baro_init();
-
-	if (ret) {
-		goto exit_immediate;
-	}
-
-	ret = adc_init();
-
-	if (ret) {
-		goto exit_immediate;
+		warnx("Sensor initialization failed");
+		_sensors_task = -1;
+		if (_fd_adc >=0) {
+			close(_fd_adc);
+			_fd_adc = -1;
+		}
+		return;
 	}
 
 	/*
@@ -2169,7 +2165,7 @@ Sensors::task_main()
 	_sensor_pub = orb_advertise(ORB_ID(sensor_combined), &raw);
 
 	/* wakeup source(s) */
-	struct pollfd fds[1];
+	px4_pollfd_struct_t fds[1];
 
 	/* use the gyro to pace output - XXX BROKEN if we are using the L3GD20 */
 	fds[0].fd = _gyro_sub;
@@ -2177,10 +2173,12 @@ Sensors::task_main()
 
 	_task_should_exit = false;
 
+	raw.timestamp = 0;
+
 	while (!_task_should_exit) {
 
 		/* wait for up to 50ms for data */
-		int pret = poll(&fds[0], (sizeof(fds) / sizeof(fds[0])), 50);
+		int pret = px4_poll(&fds[0], (sizeof(fds) / sizeof(fds[0])), 50);
 
 		/* if pret == 0 it timed out - periodic check for _task_should_exit, etc. */
 
@@ -2219,7 +2217,7 @@ Sensors::task_main()
 		diff_pres_poll(raw);
 
 		/* Inform other processes that new data is available to copy */
-		if (_publishing) {
+		if (_publishing && raw.timestamp > 0) {
 			orb_publish(ORB_ID(sensor_combined), _sensor_pub, &raw);
 		}
 
@@ -2236,10 +2234,8 @@ Sensors::task_main()
 	}
 
 	warnx("exiting.");
-
-exit_immediate:
 	_sensors_task = -1;
-	_exit(ret);
+	px4_task_exit(ret);
 }
 
 int
@@ -2248,11 +2244,11 @@ Sensors::start()
 	ASSERT(_sensors_task == -1);
 
 	/* start the task */
-	_sensors_task = task_spawn_cmd("sensors_task",
+	_sensors_task = px4_task_spawn_cmd("sensors_task",
 				       SCHED_DEFAULT,
 				       SCHED_PRIORITY_MAX - 5,
 				       2000,
-				       (main_t)&Sensors::task_main_trampoline,
+				       (px4_main_t)&Sensors::task_main_trampoline,
 				       nullptr);
 
 	/* wait until the task is up and running or has failed */
@@ -2270,46 +2266,53 @@ Sensors::start()
 int sensors_main(int argc, char *argv[])
 {
 	if (argc < 2) {
-		errx(1, "usage: sensors {start|stop|status}");
+		warnx("usage: sensors {start|stop|status}");
+		return 0;
 	}
 
 	if (!strcmp(argv[1], "start")) {
 
 		if (sensors::g_sensors != nullptr) {
-			errx(0, "already running");
+			warnx("already running");
+			return 0;
 		}
 
 		sensors::g_sensors = new Sensors;
 
 		if (sensors::g_sensors == nullptr) {
-			errx(1, "alloc failed");
+			warnx("alloc failed");
+			return 1;
 		}
 
 		if (OK != sensors::g_sensors->start()) {
 			delete sensors::g_sensors;
 			sensors::g_sensors = nullptr;
-			err(1, "start failed");
+			warnx("start failed");
+			return 1;
 		}
 
-		exit(0);
+		return 0;
 	}
 
 	if (!strcmp(argv[1], "stop")) {
 		if (sensors::g_sensors == nullptr) {
-			errx(1, "not running");
+			warnx("not running");
+			return 1;
 		}
 
 		delete sensors::g_sensors;
 		sensors::g_sensors = nullptr;
-		exit(0);
+		return 0;
 	}
 
 	if (!strcmp(argv[1], "status")) {
 		if (sensors::g_sensors) {
-			errx(0, "is running");
+			warnx("is running");
+			return 0;
 
 		} else {
-			errx(1, "not running");
+			warnx("not running");
+			return 1;
 		}
 	}
 

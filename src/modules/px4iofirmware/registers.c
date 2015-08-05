@@ -37,7 +37,7 @@
  * Implementation of the PX4IO register space.
  */
 
-#include <nuttx/config.h>
+#include <px4_config.h>
 
 #include <stdbool.h>
 #include <stdlib.h>
@@ -173,6 +173,10 @@ volatile uint16_t	r_page_setup[] =
 	[PX4IO_P_SETUP_REBOOT_BL]		= 0,
 	[PX4IO_P_SETUP_CRC ... (PX4IO_P_SETUP_CRC+1)] = 0,
 	[PX4IO_P_SETUP_RC_THR_FAILSAFE_US] = 0,
+	[PX4IO_P_SETUP_PWM_REVERSE] = 0,
+	[PX4IO_P_SETUP_TRIM_ROLL] = 0,
+	[PX4IO_P_SETUP_TRIM_PITCH] = 0,
+	[PX4IO_P_SETUP_TRIM_YAW] = 0
 };
 
 #ifdef CONFIG_ARCH_BOARD_PX4IO_V2
@@ -620,6 +624,16 @@ registers_set_one(uint8_t page, uint8_t offset, uint16_t value)
 			if (value > 650 && value < 2350) {
 				r_page_setup[PX4IO_P_SETUP_RC_THR_FAILSAFE_US] = value;
 			}
+			break;
+
+		case PX4IO_P_SETUP_PWM_REVERSE:
+			r_page_setup[PX4IO_P_SETUP_PWM_REVERSE] = value;
+			break;
+
+		case PX4IO_P_SETUP_TRIM_ROLL:
+		case PX4IO_P_SETUP_TRIM_PITCH:
+		case PX4IO_P_SETUP_TRIM_YAW:
+			r_page_setup[offset] = value;
 			break;
 
 		default:

@@ -38,7 +38,11 @@
  * @author Lorenz Meier <lm@inf.ethz.ch>
  */
 
+#include <px4_defines.h>
+#include <px4_posix.h>
+#include <px4_time.h>
 #include <stdio.h>
+#include <unistd.h>
 #include <math.h>
 #include <float.h>
 #include <poll.h>
@@ -53,9 +57,6 @@
 #include "calibration_routines.h"
 #include "calibration_messages.h"
 #include "commander_helper.h"
-
-// FIXME: Fix return codes
-static const int ERROR = -1;
 
 int sphere_fit_least_squares(const float x[], const float y[], const float z[],
 			     unsigned int size, unsigned int max_iterations, float delta, float *sphere_x, float *sphere_y, float *sphere_z,
@@ -243,9 +244,9 @@ enum detect_orientation_return detect_orientation(int mavlink_fd, int cancel_sub
 	const float	normal_still_thr = 0.25;		// normal still threshold
 	float		still_thr2 = powf(lenient_still_position ? (normal_still_thr * 3) : normal_still_thr, 2);
 	float		accel_err_thr = 5.0f;			// set accel error threshold to 5m/s^2
-	hrt_abstime	still_time = lenient_still_position ? 1000000 : 1500000;	// still time required in us
+	hrt_abstime	still_time = lenient_still_position ? 500000 : 1300000;	// still time required in us
     
-	struct pollfd fds[1];
+	px4_pollfd_struct_t fds[1];
 	fds[0].fd = accel_sub;
 	fds[0].events = POLLIN;
 	
@@ -261,7 +262,7 @@ enum detect_orientation_return detect_orientation(int mavlink_fd, int cancel_sub
 	
 	while (true) {
 		/* wait blocking for new data */
-		int poll_ret = poll(fds, 1, 1000);
+		int poll_ret = px4_poll(fds, 1, 1000);
 		
 		if (poll_ret) {
 			orb_copy(ORB_ID(sensor_combined), accel_sub, &sensor);
@@ -324,7 +325,7 @@ enum detect_orientation_return detect_orientation(int mavlink_fd, int cancel_sub
 				/* not still, reset still start time */
 				if (t_still != 0) {
 					mavlink_and_console_log_info(mavlink_fd, "[cal] detected motion, hold still...");
-					usleep(500000);
+					usleep(200000);
 					t_still = 0;
 				}
 			}
@@ -469,8 +470,8 @@ calibrate_return calibrate_from_orientation(int		mavlink_fd,
 		/* inform user about already handled side */
 		if (side_data_collected[orient]) {
 			orientation_failures++;
-			mavlink_and_console_log_info(mavlink_fd, "[cal] %s side completed or not needed", detect_orientation_str(orient));
-			mavlink_and_console_log_info(mavlink_fd, "[cal] rotate to a pending side");
+			mavlink_and_console_log_critical(mavlink_fd, "%s side already completed", detect_orientation_str(orient));
+			mavlink_and_console_log_critical(mavlink_fd, "rotate to a pending side");
 			continue;
 		}
 		
@@ -488,11 +489,11 @@ calibrate_return calibrate_from_orientation(int		mavlink_fd,
 		// Note that this side is complete
 		side_data_collected[orient] = true;
 		tune_neutral(true);
-		usleep(500000);
+		usleep(200000);
 	}
 	
 	if (sub_accel >= 0) {
-		close(sub_accel);
+		px4_close(sub_accel);
 	}
 	
 	return result;
@@ -508,14 +509,14 @@ void calibrate_cancel_unsubscribe(int cmd_sub)
 	orb_unsubscribe(cmd_sub);
 }
 
-static void calibrate_answer_command(int mavlink_fd, struct vehicle_command_s &cmd, enum VEHICLE_CMD_RESULT result)
+static void calibrate_answer_command(int mavlink_fd, struct vehicle_command_s &cmd, unsigned result)
 {
 	switch (result) {
-		case VEHICLE_CMD_RESULT_ACCEPTED:
+		case vehicle_command_s::VEHICLE_CMD_RESULT_ACCEPTED:
 			tune_positive(true);
 			break;
 			
-		case VEHICLE_CMD_RESULT_DENIED:
+		case vehicle_command_s::VEHICLE_CMD_RESULT_DENIED:
 			mavlink_log_critical(mavlink_fd, "command denied during calibration: %u", cmd.command);
 			tune_negative(true);
 			break;
@@ -527,28 +528,28 @@ static void calibrate_answer_command(int mavlink_fd, struct vehicle_command_s &c
 
 bool calibrate_cancel_check(int mavlink_fd, int cancel_sub)
 {
-	struct pollfd fds[1];
+	px4_pollfd_struct_t fds[1];
 	fds[0].fd = cancel_sub;
 	fds[0].events = POLLIN;
 
-	if (poll(&fds[0], 1, 0) > 0) {
+	if (px4_poll(&fds[0], 1, 0) > 0) {
 		struct vehicle_command_s cmd;
 		memset(&cmd, 0, sizeof(cmd));
 		
 		orb_copy(ORB_ID(vehicle_command), cancel_sub, &cmd);
 		
-		if (cmd.command == VEHICLE_CMD_PREFLIGHT_CALIBRATION &&
+		if (cmd.command == vehicle_command_s::VEHICLE_CMD_PREFLIGHT_CALIBRATION &&
 		    (int)cmd.param1 == 0 &&
 		    (int)cmd.param2 == 0 &&
 		    (int)cmd.param3 == 0 &&
 		    (int)cmd.param4 == 0 &&
 		    (int)cmd.param5 == 0 &&
 		    (int)cmd.param6 == 0) {
-			calibrate_answer_command(mavlink_fd, cmd, VEHICLE_CMD_RESULT_ACCEPTED);
+			calibrate_answer_command(mavlink_fd, cmd, vehicle_command_s::VEHICLE_CMD_RESULT_ACCEPTED);
 			mavlink_log_critical(mavlink_fd, CAL_QGC_CANCELLED_MSG);
 			return true;
 		} else {
-			calibrate_answer_command(mavlink_fd, cmd, VEHICLE_CMD_RESULT_DENIED);
+			calibrate_answer_command(mavlink_fd, cmd, vehicle_command_s::VEHICLE_CMD_RESULT_DENIED);
 		}
 	}
 	

@@ -33,6 +33,13 @@
 # Path and tool setup
 #
 
+export PX4_TARGET_OS 	 ?= nuttx
+
+# PX4_TARGET_OS	can be nuttx, posix, or qurt
+ifeq ($(PX4_TARGET_OS),)
+$(error Use: make PX4_TARGET_OS=<target> where <target> is nuttx, posix, or qurt)
+endif
+
 #
 # Some useful paths.
 #
@@ -47,14 +54,15 @@ export PX4_LIB_DIR	 = $(abspath $(PX4_BASE)/src/lib)/
 export PX4_PLATFORMS_DIR = $(abspath $(PX4_BASE)/src/platforms)/
 export PX4_MK_DIR	 = $(abspath $(PX4_BASE)/makefiles)/
 export NUTTX_SRC	 = $(abspath $(PX4_BASE)/NuttX/nuttx)/
-export MAVLINK_SRC	 = $(abspath $(PX4_BASE)/mavlink/include/mavlink/v1.0)/
 export NUTTX_APP_SRC	 = $(abspath $(PX4_BASE)/NuttX/apps)/
+#export MAVLINK_SRC	 = $(abspath $(PX4_BASE)/mavlink/include/mavlink/v1.0)/
 export MAVLINK_SRC	 = $(abspath $(PX4_BASE)/mavlink)/
 export UAVCAN_DIR	 = $(abspath $(PX4_BASE)/uavcan)/
 export ROMFS_SRC	 = $(abspath $(PX4_BASE)/ROMFS)/
 export IMAGE_DIR	 = $(abspath $(PX4_BASE)/Images)/
 export BUILD_DIR	 = $(abspath $(PX4_BASE)/Build)/
 export ARCHIVE_DIR	 = $(abspath $(PX4_BASE)/Archives)/
+export PX4_VERSIONING_DIR = $(BUILD_DIR)versioning/
 
 #
 # Default include paths
@@ -63,7 +71,8 @@ export INCLUDE_DIRS	:= $(PX4_MODULE_SRC) \
 			   $(PX4_MODULE_SRC)/modules/ \
 			   $(PX4_INCLUDE_DIR) \
 			   $(PX4_LIB_DIR) \
-			   $(PX4_PLATFORMS_DIR)
+			   $(PX4_PLATFORMS_DIR) \
+			   $(PX4_VERSIONING_DIR)
 
 #
 # Tools
@@ -83,6 +92,7 @@ export UNZIP_CMD	 = unzip
 export PYTHON		 = python
 export OPENOCD		 = openocd
 export GREP		 = grep
+export SIZE		 = size
 
 #
 # Host-specific paths, hacks and fixups

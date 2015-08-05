@@ -101,9 +101,10 @@ then
 		fi
 	fi
 
-	if pca8574 start
-	then
-	fi
+	# Currently unused, but might be useful down the road
+	#if pca8574 start
+	#then
+	#fi
 
 	#
 	# Set default values
@@ -233,11 +234,11 @@ then
 
 					set IO_PRESENT yes
 				else
-					echo "PX4IO update failed" >> $LOG_FILE
+					echo "ERROR: PX4IO update failed" >> $LOG_FILE
 					tone_alarm $TUNE_ERR
 				fi
 			else
-				echo "PX4IO update failed" >> $LOG_FILE
+				echo "ERROR: PX4IO update failed" >> $LOG_FILE
 				tone_alarm $TUNE_ERR
 			fi
 		fi
@@ -246,6 +247,7 @@ then
 		if [ $IO_PRESENT == no ]
 		then
 			echo "[i] ERROR: PX4IO not found"
+			echo "ERROR: PX4IO not found" >> $LOG_FILE
 			tone_alarm $TUNE_ERR
 		fi
 	fi
@@ -301,6 +303,18 @@ then
 	# Sensors System (start before Commander so Preflight checks are properly run)
 	#
 	sh /etc/init.d/rc.sensors
+	
+	if [ $GPS == yes ]
+	then
+		if [ $GPS_FAKE == yes ]
+		then
+			echo "[i] Faking GPS"
+			gps start -f
+		else
+			gps start
+		fi
+	fi
+	unset GPS_FAKE
 
 	# Needs to be this early for in-air-restarts
 	commander start
@@ -328,6 +342,7 @@ then
 			then
 				sh /etc/init.d/rc.io
 			else
+				echo "ERROR: PX4IO start failed" >> $LOG_FILE
 				tone_alarm $TUNE_ERR
 			fi
 		fi
@@ -339,6 +354,7 @@ then
 				echo "[i] FMU mode_$FMU_MODE started"
 			else
 				echo "[i] ERROR: FMU mode_$FMU_MODE start failed"
+				echo "ERROR: FMU start failed" >> $LOG_FILE
 				tone_alarm $TUNE_ERR
 			fi
 
@@ -372,6 +388,7 @@ then
 				echo "[i] MK started"
 			else
 				echo "[i] ERROR: MK start failed"
+				echo "ERROR: MK start failed" >> $LOG_FILE
 				tone_alarm $TUNE_ERR
 			fi
 			unset MKBLCTRL_ARG
@@ -385,6 +402,7 @@ then
 				echo "[i] HIL output started"
 			else
 				echo "[i] ERROR: HIL output start failed"
+				echo "ERROR: HIL output start failed" >> $LOG_FILE
 				tone_alarm $TUNE_ERR
 			fi
 		fi
@@ -402,6 +420,7 @@ then
 					sh /etc/init.d/rc.io
 				else
 					echo "[i] ERROR: PX4IO start failed"
+					echo "ERROR: PX4IO start failed" >> $LOG_FILE
 					tone_alarm $TUNE_ERR
 				fi
 			fi
@@ -413,6 +432,7 @@ then
 					echo "[i] FMU mode_$FMU_MODE started"
 				else
 					echo "[i] ERROR: FMU mode_$FMU_MODE start failed"
+					echo "ERROR: FMU mode_$FMU_MODE start failed" >> $LOG_FILE
 					tone_alarm $TUNE_ERR
 				fi
 
@@ -431,19 +451,30 @@ then
 		fi
 	fi
 
+	# Start sensors depending on the interface being up
+	if param compare SENS_EN_LL40LS 1
+	then
+		if pwm_input start
+		then
+			if ll40ls start pwm
+			then
+			fi
+		fi
+	fi
+
 	if [ $MAVLINK_F == default ]
 	then
 		# Normal mode, use baudrate 57600 (default) and data rate 1000 bytes/s
 		if [ $TTYS1_BUSY == yes ]
 		then
 			# Start MAVLink on ttyS0, because FMU ttyS1 pins configured as something else
-			set MAVLINK_F "-r 1000 -d /dev/ttyS0"
+			set MAVLINK_F "-r 1200 -d /dev/ttyS0"
 
 			# Exit from nsh to free port for mavlink
 			set EXIT_ON_END yes
 		else
 			# Start MAVLink on default port: ttyS1
-			set MAVLINK_F "-r 1000"
+			set MAVLINK_F "-r 1200"
 		fi
 	fi
 
@@ -459,11 +490,15 @@ then
 		# but this works for now
 		if param compare SYS_COMPANION 921600
 		then
-			mavlink start -d /dev/ttyS2 -b 921600 -m onboard -r 20000
+			mavlink start -d /dev/ttyS2 -b 921600 -m onboard -r 80000 -x
 		fi
 		if param compare SYS_COMPANION 57600
 		then
-			mavlink start -d /dev/ttyS2 -b 57600 -m onboard -r 1000
+			mavlink start -d /dev/ttyS2 -b 57600 -m onboard -r 5000 -x
+		fi
+		if param compare SYS_COMPANION 157600
+		then
+			mavlink start -d /dev/ttyS2 -b 57600 -m osd -r 1000
 		fi
 	fi
 
@@ -472,21 +507,9 @@ then
 	sh /etc/init.d/rc.uavcan
 
 	#
-	# Logging, GPS
+	# Logging
 	#
 	sh /etc/init.d/rc.logging
-
-	if [ $GPS == yes ]
-	then
-		if [ $GPS_FAKE == yes ]
-		then
-			echo "[i] Faking GPS"
-			gps start -f
-		else
-			gps start
-		fi
-	fi
-	unset GPS_FAKE
 
 	#
 	# Start up ARDrone Motor interface
@@ -552,7 +575,7 @@ then
 			fi
 			if [ $MIXER == tri_y_yaw- -o $MIXER == tri_y_yaw+ ]
 			then
-				set MAV_TYPE 2
+				set MAV_TYPE 15
 			fi
 			if [ $MIXER == hexa_x -o $MIXER == hexa_+ ]
 			then
@@ -576,6 +599,7 @@ then
 		if [ $MAV_TYPE == none ]
 		then
 			echo "Unknown MAV_TYPE"
+			param set MAV_TYPE 2
 		else
 			param set MAV_TYPE $MAV_TYPE
 		fi
@@ -619,6 +643,7 @@ then
 		if [ $MAV_TYPE == none ]
 		then
 			echo "Unknown MAV_TYPE"
+			param set MAV_TYPE 19
 		else
 			param set MAV_TYPE $MAV_TYPE
 		fi
@@ -649,6 +674,8 @@ then
 		then
 			sh /etc/init.d/rc.axialracing_ax10_apps
 		fi
+
+		param set MAV_TYPE 10
 	fi
 
 	unset MIXER
@@ -686,13 +713,16 @@ then
 	fi
 	unset EXIT_ON_END
 
-	# Run no SD alarm last
+	# Run no SD alarm
 	if [ $LOG_FILE == /dev/null ]
 	then
 		echo "[i] No microSD card found"
 		# Play SOS
 		tone_alarm error
 	fi
+
+	# Boot is complete, inform MAVLink app(s) that the system is now fully up and running
+	mavlink boot_complete
 
 # End of autostart
 fi

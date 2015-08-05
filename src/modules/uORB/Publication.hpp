@@ -64,16 +64,19 @@ public:
 	 */
 	PublicationBase(const struct orb_metadata *meta) :
 		_meta(meta),
-		_handle(-1) {
+		_handle(nullptr)
+	{
 	}
 
 	/**
 	 * Update the struct
 	 * @param data The uORB message struct we are updating.
 	 */
-	void update(void * data) {
-		if (_handle > 0) {
+	void update(void *data)
+	{
+		if (_handle != nullptr) {
 			orb_publish(getMeta(), getHandle(), data);
+
 		} else {
 			setHandle(orb_advertise(getMeta(), data));
 		}
@@ -82,18 +85,23 @@ public:
 	/**
 	 * Deconstructor
 	 */
-	virtual ~PublicationBase() {
-		orb_unsubscribe(getHandle());
+	virtual ~PublicationBase()
+	{
 	}
 // accessors
 	const struct orb_metadata *getMeta() { return _meta; }
-	int getHandle() { return _handle; }
+	orb_advert_t getHandle() { return _handle; }
 protected:
 // accessors
 	void setHandle(orb_advert_t handle) { _handle = handle; }
 // attributes
 	const struct orb_metadata *_meta;
 	orb_advert_t _handle;
+private:
+	// forbid copy
+	PublicationBase(const PublicationBase &) : _meta(), _handle() {};
+	// forbid assignment
+	PublicationBase &operator = (const PublicationBase &);
 };
 
 /**
@@ -120,10 +128,7 @@ public:
 	 * 	that this should be appended to.
 	 */
 	PublicationNode(const struct orb_metadata *meta,
-		List<PublicationNode *> * list=nullptr) :
-		PublicationBase(meta) {
-		if (list != nullptr) list->add(this);
-	}
+			List<PublicationNode *> *list = nullptr);
 
 	/**
 	 * This function is the callback for list traversal
@@ -136,7 +141,7 @@ public:
  * Publication wrapper class
  */
 template<class T>
-class Publication :
+class __EXPORT Publication :
 	public T, // this must be first!
 	public PublicationNode
 {
@@ -150,7 +155,7 @@ public:
 	 * 	list during construction
 	 */
 	Publication(const struct orb_metadata *meta,
-		List<PublicationNode *> * list=nullptr);
+		    List<PublicationNode *> *list = nullptr);
 
 	/**
 	 * Deconstructor
@@ -169,7 +174,8 @@ public:
 	/**
 	 * Create an update function that uses the embedded struct.
 	 */
-	void update() {
+	void update()
+	{
 		PublicationBase::update(getDataVoidPtr());
 	}
 };

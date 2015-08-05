@@ -39,6 +39,8 @@
 MODULE_COMMAND = uavcan
 
 MAXOPTIMIZATION = -O3
+MODULE_STACKSIZE = 3200
+WFRAME_LARGER_THAN = 1400
 
 # Main
 SRCS += uavcan_main.cpp              \
@@ -63,8 +65,7 @@ SRCS += $(subst  $(PX4_MODULE_SRC),../../,$(LIBUAVCAN_SRC))
 INCLUDE_DIRS += $(LIBUAVCAN_INC)
 # Since actual compiler mode is C++11, the library will default to UAVCAN_CPP11, but it will fail to compile
 # because this platform lacks most of the standard library and STL. Hence we need to force C++03 mode.
-override EXTRADEFINES := $(EXTRADEFINES) -DGIT_VERSION='"$(GIT_DESC)"' -DUAVCAN_CPP_VERSION=UAVCAN_CPP03 -DUAVCAN_NO_ASSERTIONS
-
+override EXTRADEFINES := $(EXTRADEFINES) -DUAVCAN_CPP_VERSION=UAVCAN_CPP03 -DUAVCAN_NO_ASSERTIONS
 
 #
 # libuavcan drivers for STM32
@@ -74,6 +75,12 @@ include $(PX4_LIB_DIR)uavcan/libuavcan_drivers/stm32/driver/include.mk
 SRCS += $(subst  $(PX4_MODULE_SRC),../../,$(LIBUAVCAN_STM32_SRC))
 INCLUDE_DIRS += $(LIBUAVCAN_STM32_INC)
 override EXTRADEFINES := $(EXTRADEFINES) -DUAVCAN_STM32_NUTTX -DUAVCAN_STM32_NUM_IFACES=2
+
+#
+# libuavcan drivers for posix
+#
+include $(PX4_LIB_DIR)uavcan/libuavcan_drivers/posix/include.mk
+INCLUDE_DIRS += $(LIBUAVCAN_POSIX_INC)
 
 #
 # Invoke DSDL compiler
