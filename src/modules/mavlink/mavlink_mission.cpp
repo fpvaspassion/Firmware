@@ -62,10 +62,14 @@
 #endif
 static const int ERROR = -1;
 
+
 #define CHECK_SYSID_COMPID_MISSION(_msg)		(_msg.target_system == mavlink_system.sysid && \
 						((_msg.target_component == mavlink_system.compid) || \
 						(_msg.target_component == MAV_COMP_ID_MISSIONPLANNER) || \
 						(_msg.target_component == MAV_COMP_ID_ALL)))
+
+
+int chan_id;
 
 MavlinkMissionManager::MavlinkMissionManager(Mavlink *mavlink) : MavlinkStream(mavlink),
 	_state(MAVLINK_WPM_STATE_IDLE),
@@ -87,6 +91,8 @@ MavlinkMissionManager::MavlinkMissionManager(Mavlink *mavlink) : MavlinkStream(m
 	_mission_result_sub(-1),
 	_offboard_mission_pub(-1),
 	_slow_rate_limiter(_interval / 10.0f),
+	_actuators{},
+	_actuator_pub(-1),
 	_verbose(false)
 {
 	_offboard_mission_sub = orb_subscribe(ORB_ID(offboard_mission));
@@ -114,6 +120,34 @@ MavlinkMissionManager::get_size()
 		return 0;
 	}
 }
+
+
+/**
+	 * Set the actuators
+	 */
+
+int
+MavlinkMissionManager::actuators_publish()
+{
+	_actuators.timestamp = hrt_absolute_time();
+
+	// lazily publish _actuators only once available
+	if (_actuator_pub > 0) {
+		return orb_publish(ORB_ID(actuator_controls_2), _actuator_pub, &_actuators);
+		_mavlink->send_statustext_critical("Actuators published 1!");
+
+	} else {
+		_actuator_pub = orb_advertise(ORB_ID(actuator_controls_2), &_actuators);
+		if (_actuator_pub > 0) {
+			return OK;
+			_mavlink->send_statustext_critical("Actuators published 2!");
+
+		} else {
+			return -1;
+		}
+	}
+}
+
 
 void
 MavlinkMissionManager::init_offboard_mission()
@@ -784,6 +818,16 @@ MavlinkMissionManager::parse_mavlink_mission_item(const mavlink_mission_item_t *
 		mission_item->actuator_value = mavlink_mission_item->param2;
 		mission_item->autocontinue = true;
 		mission_item->time_inside=0.0f;
+
+		chan_id = mavlink_mission_item->param1;
+
+		_actuators.control[chan_id] = mavlink_mission_item->param2;
+		actuators_publish();
+
+		/* for test purpose of function during mission upload */
+		//up_pwm_servo_arm(true);
+		//up_pwm_servo_set(mission_item->actuator_num-1, mission_item->actuator_value);
+
 		break;
 
 	default:

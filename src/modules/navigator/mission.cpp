@@ -311,8 +311,13 @@ Mission::check_dist_1wp()
 							return false;
 						}
 					}
+					/* do not check non-navigation items */
+					if ( mission_item.nav_cmd == NAV_CMD_DO_SET_SERVO) {
+						return true;
+						}
 
 				} else {
+
 					/* error reading, mission is invalid */
 					mavlink_log_info(_navigator->get_mavlink_fd(), "error reading offboard mission");
 					return false;

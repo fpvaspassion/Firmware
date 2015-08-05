@@ -48,6 +48,14 @@
 #include "mavlink_rate_limiter.h"
 #include "mavlink_stream.h"
 
+
+#include <uORB/topics/actuator_controls.h>
+#include <uORB/topics/actuator_controls_0.h>
+#include <uORB/topics/actuator_controls_1.h>
+#include <uORB/topics/actuator_controls_2.h>
+#include <uORB/topics/actuator_controls_3.h>
+
+
 enum MAVLINK_WPM_STATES {
 	MAVLINK_WPM_STATE_IDLE = 0,
 	MAVLINK_WPM_STATE_SENDLIST,
@@ -124,7 +132,13 @@ private:
 
 	MavlinkRateLimiter	_slow_rate_limiter;
 
+	actuator_controls_s _actuators;
+	orb_advert_t	_actuator_pub;
+
+
 	bool _verbose;
+
+
 
 	/* do not allow top copying this class */
 	MavlinkMissionManager(MavlinkMissionManager &);
@@ -178,6 +192,8 @@ private:
 	void handle_mission_item(const mavlink_message_t *msg);
 
 	void handle_mission_clear_all(const mavlink_message_t *msg);
+
+	int actuators_publish();
 
 	/**
 	 * Parse mavlink MISSION_ITEM message to get mission_item_s.

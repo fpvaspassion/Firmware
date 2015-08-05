@@ -78,6 +78,7 @@ MissionBlock::is_mission_item_reached()
 
 		up_pwm_servo_arm(true);
 		up_pwm_servo_set(_mission_item.actuator_num-1, _mission_item.actuator_value);
+		warnx("Set servo cmd executed");
 		return true;
 	}
 
