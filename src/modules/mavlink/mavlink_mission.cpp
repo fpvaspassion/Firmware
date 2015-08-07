@@ -92,7 +92,7 @@ MavlinkMissionManager::MavlinkMissionManager(Mavlink *mavlink) : MavlinkStream(m
 	_offboard_mission_pub(nullptr),
 	_slow_rate_limiter(_interval / 10.0f),
 	_actuators{},
-	_actuator_pub(-1),
+	_actuator_pub(nullptr),
 	_verbose(false)
 {
 	_offboard_mission_sub = orb_subscribe(ORB_ID(offboard_mission));
@@ -131,13 +131,13 @@ MavlinkMissionManager::actuators_publish()
 	_actuators.timestamp = hrt_absolute_time();
 
 	// lazily publish _actuators only once available
-	if (_actuator_pub > 0) {
+	if (_actuator_pub != nullptr) {
 		return orb_publish(ORB_ID(actuator_controls_2), _actuator_pub, &_actuators);
 		_mavlink->send_statustext_critical("Actuators published 1!");
 
 	} else {
 		_actuator_pub = orb_advertise(ORB_ID(actuator_controls_2), &_actuators);
-		if (_actuator_pub > 0) {
+		if (_actuator_pub != nullptr) {
 			return OK;
 			_mavlink->send_statustext_critical("Actuators published 2!");
 
