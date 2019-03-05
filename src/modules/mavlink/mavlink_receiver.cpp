@@ -89,58 +89,6 @@ MavlinkReceiver::MavlinkReceiver(Mavlink *parent) :
 	_mavlink_ftp(parent),
 	_mavlink_log_handler(parent),
 	_mavlink_timesync(parent),
-	_status{},
-	_hil_local_pos{},
-	_hil_land_detector{},
-	_control_mode{},
-	_global_pos_pub(nullptr),
-	_local_pos_pub(nullptr),
-	_attitude_pub(nullptr),
-	_gps_pub(nullptr),
-	_gyro_pub(nullptr),
-	_accel_pub(nullptr),
-	_mag_pub(nullptr),
-	_baro_pub(nullptr),
-	_airspeed_pub(nullptr),
-	_battery_pub(nullptr),
-	_cmd_pub(nullptr),
-	_flow_pub(nullptr),
-	_hil_distance_sensor_pub(nullptr),
-	_flow_distance_sensor_pub(nullptr),
-	_distance_sensor_pub(nullptr),
-	_offboard_control_mode_pub(nullptr),
-	_actuator_controls_pubs{nullptr, nullptr, nullptr, nullptr},
-	_att_sp_pub(nullptr),
-	_rates_sp_pub(nullptr),
-	_pos_sp_triplet_pub(nullptr),
-	_mocap_odometry_pub(nullptr),
-	_visual_odometry_pub(nullptr),
-	_radio_status_pub(nullptr),
-	_ping_pub(nullptr),
-	_rc_pub(nullptr),
-	_manual_pub(nullptr),
-	_obstacle_distance_pub(nullptr),
-	_trajectory_waypoint_pub(nullptr),
-	_land_detector_pub(nullptr),
-	_follow_target_pub(nullptr),
-	_landing_target_pose_pub(nullptr),
-	_transponder_report_pub(nullptr),
-	_collision_report_pub(nullptr),
-	_debug_key_value_pub(nullptr),
-	_debug_value_pub(nullptr),
-	_debug_vect_pub(nullptr),
-	_debug_array_pub(nullptr),
-	_gps_inject_data_pub(nullptr),
-	_command_ack_pub(nullptr),
-	_hil_frames(0),
-	_old_timestamp(0),
-	_hil_local_proj_inited(0),
-	_hil_local_alt0(0.0f),
-	_hil_local_proj_ref{},
-	_offboard_control_mode{},
-	_orb_class_instance(-1),
-	_mom_switch_pos{},
-	_mom_switch_state(0),
 	_p_bat_emergen_thr(param_find("BAT_EMERGEN_THR")),
 	_p_bat_crit_thr(param_find("BAT_CRIT_THR")),
 	_p_bat_low_thr(param_find("BAT_LOW_THR")),
@@ -160,7 +108,8 @@ MavlinkReceiver::~MavlinkReceiver()
 	orb_unsubscribe(_vehicle_attitude_sub);
 }
 
-void MavlinkReceiver::acknowledge(uint8_t sysid, uint8_t compid, uint16_t command, uint8_t result)
+void
+MavlinkReceiver::acknowledge(uint8_t sysid, uint8_t compid, uint16_t command, uint8_t result)
 {
 	vehicle_command_ack_s command_ack = {};
 	command_ack.timestamp = hrt_absolute_time();
@@ -1994,8 +1943,7 @@ MavlinkReceiver::get_message_interval(int msgId)
 {
 	unsigned interval = 0;
 
-	MavlinkStream *stream = nullptr;
-	LL_FOREACH(_mavlink->get_streams(), stream) {
+	for (const auto &stream : _mavlink->get_streams()) {
 		if (stream->get_id() == msgId) {
 			interval = stream->get_interval();
 			break;
@@ -2187,7 +2135,8 @@ MavlinkReceiver::handle_message_hil_gps(mavlink_message_t *msg)
 	}
 }
 
-void MavlinkReceiver::handle_message_follow_target(mavlink_message_t *msg)
+void
+MavlinkReceiver::handle_message_follow_target(mavlink_message_t *msg)
 {
 	mavlink_follow_target_t follow_target_msg;
 	follow_target_s follow_target_topic = {};
@@ -2208,7 +2157,8 @@ void MavlinkReceiver::handle_message_follow_target(mavlink_message_t *msg)
 	}
 }
 
-void MavlinkReceiver::handle_message_landing_target(mavlink_message_t *msg)
+void
+MavlinkReceiver::handle_message_landing_target(mavlink_message_t *msg)
 {
 	mavlink_landing_target_t landing_target;
 
@@ -2231,7 +2181,8 @@ void MavlinkReceiver::handle_message_landing_target(mavlink_message_t *msg)
 	}
 }
 
-void MavlinkReceiver::handle_message_adsb_vehicle(mavlink_message_t *msg)
+void
+MavlinkReceiver::handle_message_adsb_vehicle(mavlink_message_t *msg)
 {
 	mavlink_adsb_vehicle_t adsb;
 	transponder_report_s t = {};
@@ -2277,7 +2228,8 @@ void MavlinkReceiver::handle_message_adsb_vehicle(mavlink_message_t *msg)
 	}
 }
 
-void MavlinkReceiver::handle_message_collision(mavlink_message_t *msg)
+void
+MavlinkReceiver::handle_message_collision(mavlink_message_t *msg)
 {
 	mavlink_collision_t collision;
 	collision_report_s t = {};
@@ -2301,7 +2253,8 @@ void MavlinkReceiver::handle_message_collision(mavlink_message_t *msg)
 	}
 }
 
-void MavlinkReceiver::handle_message_gps_rtcm_data(mavlink_message_t *msg)
+void
+MavlinkReceiver::handle_message_gps_rtcm_data(mavlink_message_t *msg)
 {
 	mavlink_gps_rtcm_data_t gps_rtcm_data_msg = {};
 	mavlink_msg_gps_rtcm_data_decode(msg, &gps_rtcm_data_msg);
@@ -2495,7 +2448,8 @@ MavlinkReceiver::handle_message_hil_state_quaternion(mavlink_message_t *msg)
 	}
 }
 
-void MavlinkReceiver::handle_message_named_value_float(mavlink_message_t *msg)
+void
+MavlinkReceiver::handle_message_named_value_float(mavlink_message_t *msg)
 {
 	mavlink_named_value_float_t debug_msg;
 	debug_key_value_s debug_topic;
@@ -2515,7 +2469,8 @@ void MavlinkReceiver::handle_message_named_value_float(mavlink_message_t *msg)
 	}
 }
 
-void MavlinkReceiver::handle_message_debug(mavlink_message_t *msg)
+void
+MavlinkReceiver::handle_message_debug(mavlink_message_t *msg)
 {
 	mavlink_debug_t debug_msg;
 	debug_value_s debug_topic;
@@ -2534,7 +2489,8 @@ void MavlinkReceiver::handle_message_debug(mavlink_message_t *msg)
 	}
 }
 
-void MavlinkReceiver::handle_message_debug_vect(mavlink_message_t *msg)
+void
+MavlinkReceiver::handle_message_debug_vect(mavlink_message_t *msg)
 {
 	mavlink_debug_vect_t debug_msg;
 	debug_vect_s debug_topic;
@@ -2556,7 +2512,8 @@ void MavlinkReceiver::handle_message_debug_vect(mavlink_message_t *msg)
 	}
 }
 
-void MavlinkReceiver::handle_message_debug_float_array(mavlink_message_t *msg)
+void
+MavlinkReceiver::handle_message_debug_float_array(mavlink_message_t *msg)
 {
 	mavlink_debug_float_array_t debug_msg;
 	debug_array_s debug_topic = {};
@@ -2750,12 +2707,14 @@ MavlinkReceiver::receive_thread(void *arg)
 	return nullptr;
 }
 
-void MavlinkReceiver::print_status()
+void
+MavlinkReceiver::print_status()
 {
 
 }
 
-void *MavlinkReceiver::start_helper(void *context)
+void *
+MavlinkReceiver::start_helper(void *context)
 {
 
 	MavlinkReceiver *rcv = new MavlinkReceiver((Mavlink *)context);

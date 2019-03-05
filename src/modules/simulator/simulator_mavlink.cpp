@@ -184,7 +184,7 @@ void Simulator::send_controls()
 			const mavlink_hil_actuator_controls_t hil_act_control = actuator_controls_from_outputs(actuators);
 
 			mavlink_message_t message{};
-			mavlink_msg_hil_actuator_controls_encode(0, 200, &message, &hil_act_control);
+			mavlink_msg_hil_actuator_controls_encode(_param_system_id.get(), _param_component_id.get(), &message, &hil_act_control);
 
 			PX4_DEBUG("sending controls t=%ld (%ld)", actuators.timestamp, hil_act_control.time_usec);
 
@@ -289,7 +289,7 @@ void Simulator::update_gps(mavlink_hil_gps_t *gps_sim)
 	write_gps_data((void *)&gps);
 }
 
-void Simulator::handle_message(mavlink_message_t *msg, bool publish)
+void Simulator::handle_message(mavlink_message_t *msg)
 {
 	switch (msg->msgid) {
 	case MAVLINK_MSG_ID_HIL_SENSOR: {
@@ -318,7 +318,7 @@ void Simulator::handle_message(mavlink_message_t *msg, bool publish)
 			last_time = now_us;
 #endif
 
-			if (publish) {
+			if (_publish) {
 				publish_sensor_topics(&imu);
 			}
 
@@ -357,9 +357,7 @@ void Simulator::handle_message(mavlink_message_t *msg, bool publish)
 		break;
 
 	case MAVLINK_MSG_ID_HIL_OPTICAL_FLOW:
-		mavlink_hil_optical_flow_t flow;
-		mavlink_msg_hil_optical_flow_decode(msg, &flow);
-		publish_flow_topic(&flow);
+		handle_message_optical_flow(msg);
 		break;
 
 	case MAVLINK_MSG_ID_ODOMETRY:
@@ -368,16 +366,14 @@ void Simulator::handle_message(mavlink_message_t *msg, bool publish)
 		break;
 
 	case MAVLINK_MSG_ID_DISTANCE_SENSOR:
-		mavlink_distance_sensor_t dist;
-		mavlink_msg_distance_sensor_decode(msg, &dist);
-		publish_distance_topic(&dist);
+		handle_message_distance_sensor(msg);
 		break;
 
 	case MAVLINK_MSG_ID_HIL_GPS:
 		mavlink_hil_gps_t gps_sim;
 		mavlink_msg_hil_gps_decode(msg, &gps_sim);
 
-		if (publish) {
+		if (_publish) {
 			//PX4_WARN("FIXME:  Need to publish GPS topic.  Not done yet.");
 		}
 
@@ -390,7 +386,7 @@ void Simulator::handle_message(mavlink_message_t *msg, bool publish)
 		fill_rc_input_msg(&_rc_input, &rc_channels);
 
 		// publish message
-		if (publish) {
+		if (_publish) {
 			int rc_multi;
 			orb_publish_auto(ORB_ID(input_rc), &_rc_channels_pub, &_rc_input, &rc_multi, ORB_PRIO_HIGH);
 		}
@@ -398,119 +394,140 @@ void Simulator::handle_message(mavlink_message_t *msg, bool publish)
 		break;
 
 	case MAVLINK_MSG_ID_LANDING_TARGET: {
-			mavlink_landing_target_t landing_target_mavlink;
-			mavlink_msg_landing_target_decode(msg, &landing_target_mavlink);
-
-			struct irlock_report_s report = {};
-
-			report.timestamp = hrt_absolute_time();
-			report.signature = landing_target_mavlink.target_num;
-			report.pos_x = landing_target_mavlink.angle_x;
-			report.pos_y = landing_target_mavlink.angle_y;
-			report.size_x = landing_target_mavlink.size_x;
-			report.size_y = landing_target_mavlink.size_y;
-
-			int irlock_multi;
-			orb_publish_auto(ORB_ID(irlock_report), &_irlock_report_pub, &report, &irlock_multi, ORB_PRIO_HIGH);
-
+			handle_message_landing_target(msg);
 			break;
 		}
 
 	case MAVLINK_MSG_ID_HIL_STATE_QUATERNION:
-		mavlink_hil_state_quaternion_t hil_state;
-		mavlink_msg_hil_state_quaternion_decode(msg, &hil_state);
-
-		uint64_t timestamp = hrt_absolute_time();
-
-		/* attitude */
-		struct vehicle_attitude_s hil_attitude = {};
-		{
-			hil_attitude.timestamp = timestamp;
-
-			matrix::Quatf q(hil_state.attitude_quaternion);
-			q.copyTo(hil_attitude.q);
-
-			hil_attitude.rollspeed = hil_state.rollspeed;
-			hil_attitude.pitchspeed = hil_state.pitchspeed;
-			hil_attitude.yawspeed = hil_state.yawspeed;
-
-			// always publish ground truth attitude message
-			int hilstate_multi;
-			orb_publish_auto(ORB_ID(vehicle_attitude_groundtruth), &_attitude_pub, &hil_attitude, &hilstate_multi, ORB_PRIO_HIGH);
-		}
-
-		/* global position */
-		struct vehicle_global_position_s hil_gpos = {};
-		{
-			hil_gpos.timestamp = timestamp;
-
-			hil_gpos.lat = hil_state.lat / 1E7;//1E7
-			hil_gpos.lon = hil_state.lon / 1E7;//1E7
-			hil_gpos.alt = hil_state.alt / 1E3;//1E3
-
-			hil_gpos.vel_n = hil_state.vx / 100.0f;
-			hil_gpos.vel_e = hil_state.vy / 100.0f;
-			hil_gpos.vel_d = hil_state.vz / 100.0f;
-
-			// always publish ground truth attitude message
-			int hil_gpos_multi;
-			orb_publish_auto(ORB_ID(vehicle_global_position_groundtruth), &_gpos_pub, &hil_gpos, &hil_gpos_multi,
-					 ORB_PRIO_HIGH);
-		}
-
-		/* local position */
-		struct vehicle_local_position_s hil_lpos = {};
-		{
-			hil_lpos.timestamp = timestamp;
-
-			double lat = hil_state.lat * 1e-7;
-			double lon = hil_state.lon * 1e-7;
-
-			if (!_hil_local_proj_inited) {
-				_hil_local_proj_inited = true;
-				map_projection_init(&_hil_local_proj_ref, lat, lon);
-				_hil_ref_timestamp = timestamp;
-				_hil_ref_lat = lat;
-				_hil_ref_lon = lon;
-				_hil_ref_alt = hil_state.alt / 1000.0f;
-			}
-
-			float x;
-			float y;
-			map_projection_project(&_hil_local_proj_ref, lat, lon, &x, &y);
-			hil_lpos.timestamp = timestamp;
-			hil_lpos.xy_valid = true;
-			hil_lpos.z_valid = true;
-			hil_lpos.v_xy_valid = true;
-			hil_lpos.v_z_valid = true;
-			hil_lpos.x = x;
-			hil_lpos.y = y;
-			hil_lpos.z = _hil_ref_alt - hil_state.alt / 1000.0f;
-			hil_lpos.vx = hil_state.vx / 100.0f;
-			hil_lpos.vy = hil_state.vy / 100.0f;
-			hil_lpos.vz = hil_state.vz / 100.0f;
-			matrix::Eulerf euler = matrix::Quatf(hil_attitude.q);
-			hil_lpos.yaw = euler.psi();
-			hil_lpos.xy_global = true;
-			hil_lpos.z_global = true;
-			hil_lpos.ref_lat = _hil_ref_lat;
-			hil_lpos.ref_lon = _hil_ref_lon;
-			hil_lpos.ref_alt = _hil_ref_alt;
-			hil_lpos.ref_timestamp = _hil_ref_timestamp;
-			hil_lpos.vxy_max = std::numeric_limits<float>::infinity();
-			hil_lpos.vz_max = std::numeric_limits<float>::infinity();
-			hil_lpos.hagl_min = std::numeric_limits<float>::infinity();
-			hil_lpos.hagl_max = std::numeric_limits<float>::infinity();
-
-			// always publish ground truth attitude message
-			int hil_lpos_multi;
-			orb_publish_auto(ORB_ID(vehicle_local_position_groundtruth), &_lpos_pub, &hil_lpos, &hil_lpos_multi,
-					 ORB_PRIO_HIGH);
-		}
-
+		handle_message_hil_state_quaternion(msg);
 		break;
 	}
+}
 
+void Simulator::handle_message_distance_sensor(const mavlink_message_t *msg)
+{
+	mavlink_distance_sensor_t dist;
+	mavlink_msg_distance_sensor_decode(msg, &dist);
+	publish_distance_topic(&dist);
+}
+
+void Simulator::handle_message_hil_state_quaternion(const mavlink_message_t *msg)
+{
+	mavlink_hil_state_quaternion_t hil_state;
+	mavlink_msg_hil_state_quaternion_decode(msg, &hil_state);
+
+	uint64_t timestamp = hrt_absolute_time();
+
+	/* attitude */
+	struct vehicle_attitude_s hil_attitude = {};
+	{
+		hil_attitude.timestamp = timestamp;
+
+		matrix::Quatf q(hil_state.attitude_quaternion);
+		q.copyTo(hil_attitude.q);
+
+		hil_attitude.rollspeed = hil_state.rollspeed;
+		hil_attitude.pitchspeed = hil_state.pitchspeed;
+		hil_attitude.yawspeed = hil_state.yawspeed;
+
+		// always publish ground truth attitude message
+		int hilstate_multi;
+		orb_publish_auto(ORB_ID(vehicle_attitude_groundtruth), &_attitude_pub, &hil_attitude, &hilstate_multi, ORB_PRIO_HIGH);
+	}
+
+	/* global position */
+	struct vehicle_global_position_s hil_gpos = {};
+	{
+		hil_gpos.timestamp = timestamp;
+
+		hil_gpos.lat = hil_state.lat / 1E7;//1E7
+		hil_gpos.lon = hil_state.lon / 1E7;//1E7
+		hil_gpos.alt = hil_state.alt / 1E3;//1E3
+
+		hil_gpos.vel_n = hil_state.vx / 100.0f;
+		hil_gpos.vel_e = hil_state.vy / 100.0f;
+		hil_gpos.vel_d = hil_state.vz / 100.0f;
+
+		// always publish ground truth attitude message
+		int hil_gpos_multi;
+		orb_publish_auto(ORB_ID(vehicle_global_position_groundtruth), &_gpos_pub, &hil_gpos, &hil_gpos_multi,
+				 ORB_PRIO_HIGH);
+	}
+
+	/* local position */
+	struct vehicle_local_position_s hil_lpos = {};
+	{
+		hil_lpos.timestamp = timestamp;
+
+		double lat = hil_state.lat * 1e-7;
+		double lon = hil_state.lon * 1e-7;
+
+		if (!_hil_local_proj_inited) {
+			_hil_local_proj_inited = true;
+			map_projection_init(&_hil_local_proj_ref, lat, lon);
+			_hil_ref_timestamp = timestamp;
+			_hil_ref_lat = lat;
+			_hil_ref_lon = lon;
+			_hil_ref_alt = hil_state.alt / 1000.0f;
+		}
+
+		float x;
+		float y;
+		map_projection_project(&_hil_local_proj_ref, lat, lon, &x, &y);
+		hil_lpos.timestamp = timestamp;
+		hil_lpos.xy_valid = true;
+		hil_lpos.z_valid = true;
+		hil_lpos.v_xy_valid = true;
+		hil_lpos.v_z_valid = true;
+		hil_lpos.x = x;
+		hil_lpos.y = y;
+		hil_lpos.z = _hil_ref_alt - hil_state.alt / 1000.0f;
+		hil_lpos.vx = hil_state.vx / 100.0f;
+		hil_lpos.vy = hil_state.vy / 100.0f;
+		hil_lpos.vz = hil_state.vz / 100.0f;
+		matrix::Eulerf euler = matrix::Quatf(hil_attitude.q);
+		hil_lpos.yaw = euler.psi();
+		hil_lpos.xy_global = true;
+		hil_lpos.z_global = true;
+		hil_lpos.ref_lat = _hil_ref_lat;
+		hil_lpos.ref_lon = _hil_ref_lon;
+		hil_lpos.ref_alt = _hil_ref_alt;
+		hil_lpos.ref_timestamp = _hil_ref_timestamp;
+		hil_lpos.vxy_max = std::numeric_limits<float>::infinity();
+		hil_lpos.vz_max = std::numeric_limits<float>::infinity();
+		hil_lpos.hagl_min = std::numeric_limits<float>::infinity();
+		hil_lpos.hagl_max = std::numeric_limits<float>::infinity();
+
+		// always publish ground truth attitude message
+		int hil_lpos_multi;
+		orb_publish_auto(ORB_ID(vehicle_local_position_groundtruth), &_lpos_pub, &hil_lpos, &hil_lpos_multi,
+				 ORB_PRIO_HIGH);
+	}
+}
+
+void Simulator::handle_message_landing_target(const mavlink_message_t *msg)
+{
+	mavlink_landing_target_t landing_target_mavlink;
+	mavlink_msg_landing_target_decode(msg, &landing_target_mavlink);
+
+	struct irlock_report_s report = {};
+
+	report.timestamp = hrt_absolute_time();
+	report.signature = landing_target_mavlink.target_num;
+	report.pos_x = landing_target_mavlink.angle_x;
+	report.pos_y = landing_target_mavlink.angle_y;
+	report.size_x = landing_target_mavlink.size_x;
+	report.size_y = landing_target_mavlink.size_y;
+
+	int irlock_multi;
+	orb_publish_auto(ORB_ID(irlock_report), &_irlock_report_pub, &report, &irlock_multi, ORB_PRIO_HIGH);
+}
+
+void Simulator::handle_message_optical_flow(const mavlink_message_t *msg)
+{
+	mavlink_hil_optical_flow_t flow;
+	mavlink_msg_hil_optical_flow_decode(msg, &flow);
+	publish_flow_topic(&flow);
 }
 
 void Simulator::send_mavlink_message(const mavlink_message_t &aMsg)
@@ -600,7 +617,7 @@ void Simulator::request_hil_state_quaternion()
 	cmd_long.command = MAV_CMD_SET_MESSAGE_INTERVAL;
 	cmd_long.param1 = MAVLINK_MSG_ID_HIL_STATE_QUATERNION;
 	cmd_long.param2 = 5e3;
-	mavlink_msg_command_long_encode(0, 50, &message, &cmd_long);
+	mavlink_msg_command_long_encode(_param_system_id.get(), _param_component_id.get(), &message, &cmd_long);
 	send_mavlink_message(message);
 }
 
@@ -610,11 +627,11 @@ void Simulator::send_heartbeat()
 	mavlink_message_t message = {};
 	hb.autopilot = 12;
 	hb.base_mode |= (_vehicle_status.arming_state == vehicle_status_s::ARMING_STATE_ARMED) ? 128 : 0;
-	mavlink_msg_heartbeat_encode(0, 50, &message, &hb);
+	mavlink_msg_heartbeat_encode(_param_system_id.get(), _param_component_id.get(), &message, &hb);
 	send_mavlink_message(message);
 }
 
-void Simulator::initializeSensorData()
+void Simulator::initialize_sensor_data()
 {
 	// Write sensor data to memory so that drivers can copy data from there.
 	RawMPUData mpu = {};
@@ -646,7 +663,7 @@ void Simulator::initializeSensorData()
 	write_airspeed_data(&airspeed);
 }
 
-void Simulator::pollForMAVLinkMessages(bool publish)
+void Simulator::poll_for_MAVLink_messages()
 {
 #ifdef __PX4_DARWIN
 	pthread_setname_np("sim_rcv");
@@ -800,7 +817,7 @@ void Simulator::pollForMAVLinkMessages(bool publish)
 
 				for (int i = 0; i < len; i++) {
 					if (mavlink_parse_char(MAVLINK_COMM_0, _buf[i], &msg, &mavlink_status)) {
-						handle_message(&msg, publish);
+						handle_message(&msg);
 					}
 				}
 			}
@@ -820,7 +837,10 @@ void Simulator::pollForMAVLinkMessages(bool publish)
 				for (int i = 0; i < len; ++i) {
 					if (mavlink_parse_char(MAVLINK_COMM_1, serial_buf[i], &msg, &serial_status)) {
 						// have a message, handle it
-						handle_message(&msg, true);
+						bool prev_publish = _publish;
+						set_publish(true);
+						handle_message(&msg);
+						set_publish(prev_publish);
 					}
 				}
 			}
@@ -1195,4 +1215,9 @@ int Simulator::publish_distance_topic(mavlink_distance_sensor_t *dist_mavlink)
 	orb_publish_auto(ORB_ID(distance_sensor), &_dist_pub, &dist, &dist_multi, ORB_PRIO_HIGH);
 
 	return OK;
+}
+
+void Simulator::set_publish(const bool publish)
+{
+	_publish = publish;
 }

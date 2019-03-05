@@ -486,22 +486,13 @@ MulticopterPositionControl::limit_altitude(vehicle_local_position_setpoint_s &se
 		return;
 	}
 
-	float altitude_above_home = -(_states.position(2) - _home_pos.z);
+	// maximum altitude == minimal z-value (NED)
+	const float min_z = _home_pos.z + (-_vehicle_land_detected.alt_max);
 
-	if (altitude_above_home > _vehicle_land_detected.alt_max) {
-		// we are above maximum altitude
-		setpoint.z = -_vehicle_land_detected.alt_max +  _home_pos.z;
-		setpoint.vz = 0.0f;
-
-	} else if (setpoint.vz <= 0.0f) {
-		// we want to fly upwards: check if vehicle does not exceed altitude
-
-		float delta_p = _vehicle_land_detected.alt_max - altitude_above_home;
-
-		if (fabsf(setpoint.vz) * _dt > delta_p) {
-			setpoint.z = -_vehicle_land_detected.alt_max +  _home_pos.z;
-			setpoint.vz = 0.0f;
-		}
+	if (_states.position(2) < min_z) {
+		// above maximum altitude, only allow downwards flight == positive vz-setpoints (NED)
+		setpoint.z = min_z;
+		setpoint.vz = math::max(setpoint.vz, 0.f);
 	}
 }
 
@@ -785,6 +776,10 @@ MulticopterPositionControl::run()
 			// This message will be used by other modules (such as Landdetector) to determine
 			// vehicle intention.
 			publish_local_pos_sp(local_pos_sp);
+
+			// Inform FlightTask about the input and output of the velocity controller
+			// This is used to properly initialize the velocity setpoint when onpening the position loop (position unlock)
+			_flight_tasks.updateVelocityControllerIO(_control.getVelSp(), local_pos_sp.thrust);
 
 			// Part of landing logic: if ground-contact/maybe landed was detected, turn off
 			// controller. This message does not have to be logged as part of the vehicle_local_position_setpoint topic.

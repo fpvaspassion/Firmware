@@ -31,66 +31,41 @@
  *
  ****************************************************************************/
 
+#ifndef DRIVERS_IMU_ADIS16497_ADIS16497_GYRO_HPP_
+#define DRIVERS_IMU_ADIS16497_ADIS16497_GYRO_HPP_
+
+#include "ADIS16497.hpp"
+
+#include <drivers/device/CDev.hpp>
+#include <drivers/drv_gyro.h>
+
 /**
- * @file px4_module_params.h
- *
- * @class ModuleParams is a C++ base class for modules/classes using configuration parameters.
+ * Helper class implementing the gyro driver node.
  */
-
-#pragma once
-
-#include <containers/List.hpp>
-
-#include "px4_param.h"
-
-class ModuleParams : public ListNode<ModuleParams *>
+class ADIS16497_gyro : public device::CDev
 {
 public:
+	ADIS16497_gyro(ADIS16497 *parent, const char *path);
+	virtual ~ADIS16497_gyro();
 
-	ModuleParams(ModuleParams *parent)
-	{
-		setParent(parent);
-	}
+	virtual int		ioctl(struct file *filp, int cmd, unsigned long arg);
 
-	/**
-	 * @brief Sets the parent module. This is typically not required,
-	 *         only in cases where the parent cannot be set via constructor.
-	 */
-	void setParent(ModuleParams *parent)
-	{
-		if (parent) {
-			parent->_children.add(this);
-		}
-	}
-
-	virtual ~ModuleParams() = default;
-
-	// Disallow copy construction and move assignment.
-	ModuleParams(const ModuleParams &) = delete;
-	ModuleParams &operator=(const ModuleParams &) = delete;
-	ModuleParams(ModuleParams &&) = delete;
-	ModuleParams &operator=(ModuleParams &&) = delete;
+	virtual int		init();
 
 protected:
-	/**
-	 * @brief Call this method whenever the module gets a parameter change notification.
-	 *        It will automatically call updateParams() for all children, which then call updateParamsImpl().
-	 */
-	virtual void updateParams()
-	{
-		for (const auto &child : _children) {
-			child->updateParams();
-		}
-
-		updateParamsImpl();
-	}
-
-	/**
-	 * @brief The implementation for this is generated with the macro DEFINE_PARAMETERS()
-	 */
-	virtual void updateParamsImpl() {}
+	friend class ADIS16497;
 
 private:
-	/** @list _children The module parameter list of inheriting classes. */
-	List<ModuleParams *> _children;
+	ADIS16497			*_parent{nullptr};
+	orb_advert_t		_gyro_topic{nullptr};
+
+	int					_gyro_orb_class_instance{-1};
+	int					_gyro_class_instance{-1};
+
+	/* do not allow to copy this class due to pointer data members */
+	ADIS16497_gyro(const ADIS16497_gyro &);
+	ADIS16497_gyro operator=(const ADIS16497_gyro &);
+
 };
+
+#endif /* DRIVERS_IMU_ADIS16497_ADIS16497_GYRO_HPP_ */

@@ -31,66 +31,49 @@
  *
  ****************************************************************************/
 
-/**
- * @file px4_module_params.h
- *
- * @class ModuleParams is a C++ base class for modules/classes using configuration parameters.
- */
+#include "ADIS16497_gyro.hpp"
 
-#pragma once
-
-#include <containers/List.hpp>
-
-#include "px4_param.h"
-
-class ModuleParams : public ListNode<ModuleParams *>
+ADIS16497_gyro::ADIS16497_gyro(ADIS16497 *parent, const char *path) :
+	CDev("ADIS16497_gyro", path),
+	_parent(parent),
+	_gyro_topic(nullptr),
+	_gyro_orb_class_instance(-1),
+	_gyro_class_instance(-1)
 {
-public:
+}
 
-	ModuleParams(ModuleParams *parent)
-	{
-		setParent(parent);
+ADIS16497_gyro::~ADIS16497_gyro()
+{
+	if (_gyro_class_instance != -1) {
+		unregister_class_devname(GYRO_BASE_DEVICE_PATH, _gyro_class_instance);
+	}
+}
+
+int
+ADIS16497_gyro::init()
+{
+	int ret = CDev::init();
+
+	/* if probe/setup failed, bail now */
+	if (ret != OK) {
+		DEVICE_DEBUG("gyro init failed");
+		return ret;
 	}
 
-	/**
-	 * @brief Sets the parent module. This is typically not required,
-	 *         only in cases where the parent cannot be set via constructor.
-	 */
-	void setParent(ModuleParams *parent)
-	{
-		if (parent) {
-			parent->_children.add(this);
-		}
+	_gyro_class_instance = register_class_devname(GYRO_BASE_DEVICE_PATH);
+
+	return ret;
+}
+
+int
+ADIS16497_gyro::ioctl(struct file *filp, int cmd, unsigned long arg)
+{
+	switch (cmd) {
+	case DEVIOCGDEVICEID:
+		return (int)CDev::ioctl(filp, cmd, arg);
+		break;
+
+	default:
+		return _parent->gyro_ioctl(filp, cmd, arg);
 	}
-
-	virtual ~ModuleParams() = default;
-
-	// Disallow copy construction and move assignment.
-	ModuleParams(const ModuleParams &) = delete;
-	ModuleParams &operator=(const ModuleParams &) = delete;
-	ModuleParams(ModuleParams &&) = delete;
-	ModuleParams &operator=(ModuleParams &&) = delete;
-
-protected:
-	/**
-	 * @brief Call this method whenever the module gets a parameter change notification.
-	 *        It will automatically call updateParams() for all children, which then call updateParamsImpl().
-	 */
-	virtual void updateParams()
-	{
-		for (const auto &child : _children) {
-			child->updateParams();
-		}
-
-		updateParamsImpl();
-	}
-
-	/**
-	 * @brief The implementation for this is generated with the macro DEFINE_PARAMETERS()
-	 */
-	virtual void updateParamsImpl() {}
-
-private:
-	/** @list _children The module parameter list of inheriting classes. */
-	List<ModuleParams *> _children;
-};
+}
