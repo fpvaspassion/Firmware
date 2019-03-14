@@ -220,7 +220,7 @@ static void fill_rc_input_msg(input_rc_s *rc, mavlink_rc_channels_t *rc_channels
 	rc->values[17] = rc_channels->chan18_raw;
 }
 
-void Simulator::update_sensors(mavlink_hil_sensor_t *imu)
+void Simulator::update_sensors(const mavlink_hil_sensor_t *imu)
 {
 	// write sensor data to memory so that drivers can copy data from there
 	RawMPUData mpu = {};
@@ -269,7 +269,7 @@ void Simulator::update_sensors(mavlink_hil_sensor_t *imu)
 	write_airspeed_data(&airspeed);
 }
 
-void Simulator::update_gps(mavlink_hil_gps_t *gps_sim)
+void Simulator::update_gps(const mavlink_hil_gps_t *gps_sim)
 {
 	RawGPSData gps = {};
 	gps.timestamp = hrt_absolute_time();
@@ -289,71 +289,11 @@ void Simulator::update_gps(mavlink_hil_gps_t *gps_sim)
 	write_gps_data((void *)&gps);
 }
 
-void Simulator::handle_message(mavlink_message_t *msg)
+void Simulator::handle_message(const mavlink_message_t *msg)
 {
 	switch (msg->msgid) {
-	case MAVLINK_MSG_ID_HIL_SENSOR: {
-			mavlink_hil_sensor_t imu;
-			mavlink_msg_hil_sensor_decode(msg, &imu);
-
-			// set temperature to a decent value
-			imu.temperature = 32.0f;
-
-			struct timespec ts;
-			abstime_to_ts(&ts, imu.time_usec);
-			px4_clock_settime(CLOCK_MONOTONIC, &ts);
-
-			hrt_abstime now_us = hrt_absolute_time();
-
-#if 0
-			// This is just for to debug missing HIL_SENSOR messages.
-			static hrt_abstime last_time = 0;
-			hrt_abstime diff = now_us - last_time;
-			float step = diff / 4000.0f;
-
-			if (step > 1.1f || step < 0.9f) {
-				PX4_INFO("HIL_SENSOR: imu time_usec: %lu, time_usec: %lu, diff: %lu, step: %.2f", imu.time_usec, now_us, diff, step);
-			}
-
-			last_time = now_us;
-#endif
-
-			if (_publish) {
-				publish_sensor_topics(&imu);
-			}
-
-			update_sensors(&imu);
-
-			// battery simulation (limit update to 100Hz)
-			if (hrt_elapsed_time(&_battery_status.timestamp) >= 10_ms) {
-
-				const float discharge_interval_us = _battery_drain_interval_s.get() * 1000 * 1000;
-
-				bool armed = (_vehicle_status.arming_state == vehicle_status_s::ARMING_STATE_ARMED);
-
-				if (!armed || batt_sim_start == 0 || batt_sim_start > now_us) {
-					batt_sim_start = now_us;
-				}
-
-				float ibatt = -1.0f; // no current sensor in simulation
-				const float minimum_percentage = 0.499f; // change this value if you want to simulate low battery reaction
-
-				/* Simulate the voltage of a linearly draining battery but stop at the minimum percentage */
-				float battery_percentage = 1.0f - (now_us - batt_sim_start) / discharge_interval_us;
-
-				battery_percentage = math::max(battery_percentage, minimum_percentage);
-				float vbatt = math::gradual(battery_percentage, 0.f, 1.f, _battery.empty_cell_voltage(), _battery.full_cell_voltage());
-				vbatt *= _battery.cell_count();
-
-				const float throttle = 0.0f; // simulate no throttle compensation to make the estimate predictable
-				_battery.updateBatteryStatus(now_us, vbatt, ibatt, true, true, 0, throttle, armed, &_battery_status);
-
-
-				// publish the battery voltage
-				int batt_multi;
-				orb_publish_auto(ORB_ID(battery_status), &_battery_pub, &_battery_status, &batt_multi, ORB_PRIO_HIGH);
-			}
-		}
+	case MAVLINK_MSG_ID_HIL_SENSOR:
+		handle_message_hil_sensor(msg);
 		break;
 
 	case MAVLINK_MSG_ID_HIL_OPTICAL_FLOW:
@@ -361,8 +301,11 @@ void Simulator::handle_message(mavlink_message_t *msg)
 		break;
 
 	case MAVLINK_MSG_ID_ODOMETRY:
+		handle_message_odometry(msg);
+		break;
+
 	case MAVLINK_MSG_ID_VISION_POSITION_ESTIMATE:
-		publish_odometry_topic(msg);
+		handle_message_vision_position_estimate(msg);
 		break;
 
 	case MAVLINK_MSG_ID_DISTANCE_SENSOR:
@@ -370,33 +313,16 @@ void Simulator::handle_message(mavlink_message_t *msg)
 		break;
 
 	case MAVLINK_MSG_ID_HIL_GPS:
-		mavlink_hil_gps_t gps_sim;
-		mavlink_msg_hil_gps_decode(msg, &gps_sim);
-
-		if (_publish) {
-			//PX4_WARN("FIXME:  Need to publish GPS topic.  Not done yet.");
-		}
-
-		update_gps(&gps_sim);
+		handle_message_hil_gps(msg);
 		break;
 
 	case MAVLINK_MSG_ID_RC_CHANNELS:
-		mavlink_rc_channels_t rc_channels;
-		mavlink_msg_rc_channels_decode(msg, &rc_channels);
-		fill_rc_input_msg(&_rc_input, &rc_channels);
-
-		// publish message
-		if (_publish) {
-			int rc_multi;
-			orb_publish_auto(ORB_ID(input_rc), &_rc_channels_pub, &_rc_input, &rc_multi, ORB_PRIO_HIGH);
-		}
-
+		handle_message_rc_channels(msg);
 		break;
 
-	case MAVLINK_MSG_ID_LANDING_TARGET: {
-			handle_message_landing_target(msg);
-			break;
-		}
+	case MAVLINK_MSG_ID_LANDING_TARGET:
+		handle_message_landing_target(msg);
+		break;
 
 	case MAVLINK_MSG_ID_HIL_STATE_QUATERNION:
 		handle_message_hil_state_quaternion(msg);
@@ -409,6 +335,82 @@ void Simulator::handle_message_distance_sensor(const mavlink_message_t *msg)
 	mavlink_distance_sensor_t dist;
 	mavlink_msg_distance_sensor_decode(msg, &dist);
 	publish_distance_topic(&dist);
+}
+
+void Simulator::handle_message_hil_gps(const mavlink_message_t *msg)
+{
+	mavlink_hil_gps_t gps_sim;
+	mavlink_msg_hil_gps_decode(msg, &gps_sim);
+
+	if (_publish) {
+		//PX4_WARN("FIXME:  Need to publish GPS topic.  Not done yet.");
+	}
+
+	update_gps(&gps_sim);
+}
+
+void Simulator::handle_message_hil_sensor(const mavlink_message_t *msg)
+{
+	mavlink_hil_sensor_t imu;
+	mavlink_msg_hil_sensor_decode(msg, &imu);
+
+	// set temperature to a decent value
+	imu.temperature = 32.0f;
+
+	struct timespec ts;
+	abstime_to_ts(&ts, imu.time_usec);
+	px4_clock_settime(CLOCK_MONOTONIC, &ts);
+
+	hrt_abstime now_us = hrt_absolute_time();
+
+#if 0
+	// This is just for to debug missing HIL_SENSOR messages.
+	static hrt_abstime last_time = 0;
+	hrt_abstime diff = now_us - last_time;
+	float step = diff / 4000.0f;
+
+	if (step > 1.1f || step < 0.9f) {
+		PX4_INFO("HIL_SENSOR: imu time_usec: %lu, time_usec: %lu, diff: %lu, step: %.2f", imu.time_usec, now_us, diff, step);
+	}
+
+	last_time = now_us;
+#endif
+
+	if (_publish) {
+		publish_sensor_topics(&imu);
+	}
+
+	update_sensors(&imu);
+
+	// battery simulation (limit update to 100Hz)
+	if (hrt_elapsed_time(&_battery_status.timestamp) >= 10_ms) {
+
+		const float discharge_interval_us = _battery_drain_interval_s.get() * 1000 * 1000;
+
+		bool armed = (_vehicle_status.arming_state == vehicle_status_s::ARMING_STATE_ARMED);
+
+		if (!armed || batt_sim_start == 0 || batt_sim_start > now_us) {
+			batt_sim_start = now_us;
+		}
+
+		float ibatt = -1.0f; // no current sensor in simulation
+		const float minimum_percentage = 0.499f; // change this value if you want to simulate low battery reaction
+
+		/* Simulate the voltage of a linearly draining battery but stop at the minimum percentage */
+		float battery_percentage = 1.0f - (now_us - batt_sim_start) / discharge_interval_us;
+
+		battery_percentage = math::max(battery_percentage, minimum_percentage);
+		float vbatt = math::gradual(battery_percentage, 0.f, 1.f, _battery.empty_cell_voltage(), _battery.full_cell_voltage());
+		vbatt *= _battery.cell_count();
+
+		const float throttle = 0.0f; // simulate no throttle compensation to make the estimate predictable
+		_battery.updateBatteryStatus(now_us, vbatt, ibatt, true, true, 0, throttle, armed, &_battery_status);
+
+
+		// publish the battery voltage
+		int batt_multi;
+		orb_publish_auto(ORB_ID(battery_status), &_battery_pub, &_battery_status, &batt_multi, ORB_PRIO_HIGH);
+	}
 }
 
 void Simulator::handle_message_hil_state_quaternion(const mavlink_message_t *msg)
@@ -523,11 +525,34 @@ void Simulator::handle_message_landing_target(const mavlink_message_t *msg)
 	orb_publish_auto(ORB_ID(irlock_report), &_irlock_report_pub, &report, &irlock_multi, ORB_PRIO_HIGH);
 }
 
+void Simulator::handle_message_odometry(const mavlink_message_t *msg)
+{
+	publish_odometry_topic(msg);
+}
+
 void Simulator::handle_message_optical_flow(const mavlink_message_t *msg)
 {
 	mavlink_hil_optical_flow_t flow;
 	mavlink_msg_hil_optical_flow_decode(msg, &flow);
 	publish_flow_topic(&flow);
+}
+
+void Simulator::handle_message_rc_channels(const mavlink_message_t *msg)
+{
+	mavlink_rc_channels_t rc_channels;
+	mavlink_msg_rc_channels_decode(msg, &rc_channels);
+	fill_rc_input_msg(&_rc_input, &rc_channels);
+
+	// publish message
+	if (_publish) {
+		int rc_multi;
+		orb_publish_auto(ORB_ID(input_rc), &_rc_channels_pub, &_rc_input, &rc_multi, ORB_PRIO_HIGH);
+	}
+}
+
+void Simulator::handle_message_vision_position_estimate(const mavlink_message_t *msg)
+{
+	publish_odometry_topic(msg);
 }
 
 void Simulator::send_mavlink_message(const mavlink_message_t &aMsg)
@@ -945,7 +970,7 @@ int openUart(const char *uart_name, int baud)
 }
 #endif
 
-int Simulator::publish_sensor_topics(mavlink_hil_sensor_t *imu)
+int Simulator::publish_sensor_topics(const mavlink_hil_sensor_t *imu)
 {
 	uint64_t timestamp = hrt_absolute_time();
 
@@ -1040,7 +1065,7 @@ int Simulator::publish_sensor_topics(mavlink_hil_sensor_t *imu)
 	return OK;
 }
 
-int Simulator::publish_flow_topic(mavlink_hil_optical_flow_t *flow_mavlink)
+int Simulator::publish_flow_topic(const mavlink_hil_optical_flow_t *flow_mavlink)
 {
 	uint64_t timestamp = hrt_absolute_time();
 
@@ -1088,7 +1113,7 @@ int Simulator::publish_flow_topic(mavlink_hil_optical_flow_t *flow_mavlink)
 	return OK;
 }
 
-int Simulator::publish_odometry_topic(mavlink_message_t *odom_mavlink)
+int Simulator::publish_odometry_topic(const mavlink_message_t *odom_mavlink)
 {
 	uint64_t timestamp = hrt_absolute_time();
 
@@ -1195,7 +1220,7 @@ int Simulator::publish_odometry_topic(mavlink_message_t *odom_mavlink)
 	return OK;
 }
 
-int Simulator::publish_distance_topic(mavlink_distance_sensor_t *dist_mavlink)
+int Simulator::publish_distance_topic(const mavlink_distance_sensor_t *dist_mavlink)
 {
 	uint64_t timestamp = hrt_absolute_time();
 

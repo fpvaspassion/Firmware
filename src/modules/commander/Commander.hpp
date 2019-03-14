@@ -57,7 +57,7 @@
 #include <uORB/topics/vehicle_command.h>
 #include <uORB/topics/vehicle_global_position.h>
 #include <uORB/topics/vehicle_local_position.h>
-
+#include <uORB/topics/telemetry_status.h>
 using math::constrain;
 using uORB::Publication;
 using uORB::Subscription;
@@ -93,6 +93,16 @@ public:
 private:
 
 	DEFINE_PARAMETERS(
+
+		(ParamInt<px4::params::NAV_DLL_ACT>) _datalink_loss_action,
+		(ParamInt<px4::params::COM_DL_LOSS_T>) _datalink_loss_threshold,
+
+		(ParamInt<px4::params::COM_HLDL_LOSS_T>) _high_latency_datalink_loss_threshold,
+		(ParamInt<px4::params::COM_HLDL_REG_T>) _high_latency_datalink_regain_threshold,
+
+		(ParamInt<px4::params::NAV_RCL_ACT>) _rc_loss_action,
+		(ParamFloat<px4::params::COM_RC_LOSS_T>) _rc_loss_threshold,
+
 		(ParamFloat<px4::params::COM_HOME_H_T>) _home_eph_threshold,
 		(ParamFloat<px4::params::COM_HOME_V_T>) _home_epv_threshold,
 
@@ -105,7 +115,9 @@ private:
 		(ParamInt<px4::params::COM_POS_FS_GAIN>) _failsafe_pos_gain,
 
 		(ParamInt<px4::params::COM_LOW_BAT_ACT>) _low_bat_action,
-		(ParamFloat<px4::params::COM_DISARM_LAND>) _disarm_when_landed_timeout
+		(ParamFloat<px4::params::COM_DISARM_LAND>) _disarm_when_landed_timeout,
+
+		(ParamInt<px4::params::COM_OBS_AVOID>) _obs_avoid
 	)
 
 	const int64_t POSVEL_PROBATION_MIN = 1_s;	/**< minimum probation duration (usec) */
@@ -155,42 +167,43 @@ private:
 
 	void mission_init();
 
-	/**
-	 * Update the telemetry status and the corresponding status variables.
-	 * Perform system checks when new telemetry link connected.
-	 */
-	void poll_telemetry_status();
+	void estimator_check(bool *status_changed);
+
+	void battery_status_check();
 
 	/**
 	 * Checks the status of all available data links and handles switching between different system telemetry states.
 	 */
-	void data_link_checks(int32_t highlatencydatalink_loss_timeout, int32_t highlatencydatalink_regain_timeout,
-			      int32_t datalink_loss_timeout, int32_t datalink_regain_timeout, bool *status_changed);
+	void		data_link_check(bool &status_changed);
 
-	// telemetry variables
-	struct telemetry_data {
-		int subscriber = -1;
-		uint64_t last_heartbeat = 0u;
-		uint64_t last_dl_loss = 0u;
-		bool preflight_checks_reported = false;
-		bool lost = true;
-		bool high_latency = false;
-	} _telemetry[ORB_MULTI_MAX_INSTANCES];
+	int		_telemetry_status_sub{-1};
 
-	void estimator_check(bool *status_changed);
+	hrt_abstime	_datalink_last_heartbeat_gcs{0};
+
+	hrt_abstime	_datalink_last_heartbeat_onboard_controller{0};
+	bool 				_onboard_controller_lost{false};
+
+	hrt_abstime	_datalink_last_heartbeat_avoidance_system{0};
+	bool				_avoidance_system_lost{false};
+	hrt_abstime	_avoidance_system_not_started{0};
+
+	bool		_avoidance_system_status_change{false};
+	uint8_t	_datalink_last_status_avoidance_system{telemetry_status_s::MAV_STATE_UNINIT};
+
+	int			_iridiumsbd_status_sub{-1};
+
+	hrt_abstime	_high_latency_datalink_heartbeat{0};
+	hrt_abstime	_high_latency_datalink_lost{0};
 
 	int _battery_sub{-1};
 	uint8_t _battery_warning{battery_status_s::BATTERY_WARNING_NONE};
 	float _battery_current{0.0f};
-
-	void battery_status_check();
 
 	systemlib::Hysteresis	_auto_disarm_landed{false};
 	systemlib::Hysteresis	_auto_disarm_killed{false};
 
 	// Subscriptions
 	Subscription<estimator_status_s>		_estimator_status_sub{ORB_ID(estimator_status)};
-	Subscription<iridiumsbd_status_s> 		_iridiumsbd_status_sub{ORB_ID(iridiumsbd_status)};
 	Subscription<mission_result_s>			_mission_result_sub{ORB_ID(mission_result)};
 	Subscription<vehicle_global_position_s>		_global_position_sub{ORB_ID(vehicle_global_position)};
 	Subscription<vehicle_local_position_s>		_local_position_sub{ORB_ID(vehicle_local_position)};

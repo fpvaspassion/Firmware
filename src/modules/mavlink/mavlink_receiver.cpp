@@ -1882,18 +1882,22 @@ MavlinkReceiver::handle_message_heartbeat(mavlink_message_t *msg)
 		mavlink_heartbeat_t hb;
 		mavlink_msg_heartbeat_decode(msg, &hb);
 
-		/* ignore own heartbeats, accept only heartbeats from GCS */
-		if (msg->sysid != mavlink_system.sysid && hb.type == MAV_TYPE_GCS) {
+		/* Accept only heartbeats from GCS or ONBOARD Controller, skip heartbeats from other vehicles */
+		if ((msg->sysid != mavlink_system.sysid && hb.type == MAV_TYPE_GCS) || (msg->sysid == mavlink_system.sysid
+				&& hb.type == MAV_TYPE_ONBOARD_CONTROLLER)) {
 
 			telemetry_status_s &tstatus = _mavlink->get_telemetry_status();
 
 			/* set heartbeat time and topic time and publish -
 			 * the telem status also gets updated on telemetry events
 			 */
-			tstatus.heartbeat_time = tstatus.timestamp;
-			tstatus.system_id = msg->sysid;
-			tstatus.component_id = msg->compid;
+			tstatus.heartbeat_time = hrt_absolute_time();
+			tstatus.remote_system_id = msg->sysid;
+			tstatus.remote_component_id = msg->compid;
+			tstatus.remote_type = hb.type;
+			tstatus.remote_system_status = hb.system_status;
 		}
+
 	}
 }
 
@@ -2079,16 +2083,6 @@ MavlinkReceiver::handle_message_hil_sensor(mavlink_message_t *msg)
 		} else {
 			orb_publish(ORB_ID(battery_status), _battery_pub, &hil_battery_status);
 		}
-	}
-
-	/* increment counters */
-	_hil_frames++;
-
-	/* print HIL sensors rate */
-	if ((timestamp - _old_timestamp) > 10000000) {
-		// printf("receiving HIL sensors at %d hz\n", _hil_frames / 10);
-		_old_timestamp = timestamp;
-		_hil_frames = 0;
 	}
 }
 

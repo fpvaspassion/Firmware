@@ -1027,7 +1027,7 @@ void Ekf2::run()
 
 		if ((_gps_blend_mask.get() == 0) && gps1_updated) {
 			// When GPS blending is disabled we always use the first receiver instance
-			_ekf.setGpsData(_gps_state[0].time_usec, &_gps_state[0]);
+			_ekf.setGpsData(_gps_state[0].time_usec, _gps_state[0]);
 
 		} else if ((_gps_blend_mask.get() > 0) && (gps1_updated || gps2_updated)) {
 			// blend dual receivers if available
@@ -1072,7 +1072,7 @@ void Ekf2::run()
 				}
 
 				// write selected GPS to EKF
-				_ekf.setGpsData(_gps_output[_gps_select_index].time_usec, &_gps_output[_gps_select_index]);
+				_ekf.setGpsData(_gps_output[_gps_select_index].time_usec, _gps_output[_gps_select_index]);
 
 				// log blended solution as a third GPS instance
 				ekf_gps_position_s gps;
@@ -1423,7 +1423,7 @@ void Ekf2::run()
 
 				// Get covariances to vehicle odometry
 				float covariances[24];
-				_ekf.get_covariances(covariances);
+				_ekf.covariances_diagonal().copyTo(covariances);
 
 				// get the covariance matrix size
 				const size_t POS_URT_SIZE = sizeof(odom.pose_covariance) / sizeof(odom.pose_covariance[0]);
@@ -1540,7 +1540,7 @@ void Ekf2::run()
 			status.timestamp = now;
 			_ekf.get_state_delayed(status.states);
 			status.n_states = 24;
-			_ekf.get_covariances(status.covariances);
+			_ekf.covariances_diagonal().copyTo(status.covariances);
 			_ekf.get_gps_check_status(&status.gps_check_fail_flags);
 			// only report enabled GPS check failures (the param indexes are shifted by 1 bit, because they don't include
 			// the GPS Fix bit, which is always checked)
