@@ -1797,6 +1797,13 @@ Commander::run()
 					const bool sufficient_speed = (lpos.vx * lpos.vx + lpos.vy * lpos.vy > 25.0f);
 
 					bool innovation_pass = estimator_status.vel_test_ratio < 1.0f && estimator_status.pos_test_ratio < 1.0f;
+					if (estimator_status.vel_test_ratio >= 1.0f) {
+								mavlink_log_emergency(&mavlink_log_pub, "CRITICAL NAVIGATION FAILURE - vel_test_ratio %.2d", (double)estimator_status.vel_test_ratio);
+							}
+					if (estimator_status.pos_test_ratio >= 1.0f) {
+								mavlink_log_emergency(&mavlink_log_pub, "CRITICAL NAVIGATION FAILURE - pos_test_ratio %.2d", (double)estimator_status.pos_test_ratio);
+							}
+
 
 					if (!nav_test_failed) {
 						if (!nav_test_passed) {

@@ -53,7 +53,7 @@ set(config_module_list
 	drivers/distance_sensor/sf1xx
 	drivers/distance_sensor/srf02
 	drivers/distance_sensor/teraranger
-	drivers/distance_sensor/tfmini
+	#drivers/distance_sensor/tfmini
 	#drivers/distance_sensor/ulanding
 	modules/sensors
 
@@ -97,7 +97,7 @@ set(config_module_list
 	#
 	# General system control
 	#
-	#modules/camera_feedback
+	modules/camera_feedback
 	modules/commander
 	modules/events
 	#modules/gpio_led
@@ -120,8 +120,8 @@ set(config_module_list
 	#
 	# Vehicle Control
 	#
-	#modules/fw_att_control
-	#modules/fw_pos_control_l1
+	modules/fw_att_control
+	modules/fw_pos_control_l1
 	#modules/gnd_att_control
 	#modules/gnd_pos_control
 	modules/mc_att_control
