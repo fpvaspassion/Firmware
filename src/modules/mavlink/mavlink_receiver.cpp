@@ -908,17 +908,31 @@ MavlinkReceiver::handle_message_set_position_target_local_ned(mavlink_message_t 
 		offboard_control_mode.ignore_alt_hold = (bool)(set_position_target_local_ned.type_mask & 0x4);
 		offboard_control_mode.ignore_velocity = (bool)(set_position_target_local_ned.type_mask & 0x38);
 		offboard_control_mode.ignore_acceleration_force = (bool)(set_position_target_local_ned.type_mask & 0x1C0);
+               
 		bool is_force_sp = (bool)(set_position_target_local_ned.type_mask & (1 << 9));
 		/* yaw ignore flag mapps to ignore_attitude */
 		offboard_control_mode.ignore_attitude = (bool)(set_position_target_local_ned.type_mask & 0x400);
 		/* yawrate ignore flag mapps to ignore_bodyrate */
 		offboard_control_mode.ignore_bodyrate = (bool)(set_position_target_local_ned.type_mask & 0x800);
-
-
+/*
 		bool is_takeoff_sp = (bool)(set_position_target_local_ned.type_mask & 0x1000);
 		bool is_land_sp = (bool)(set_position_target_local_ned.type_mask & 0x2000);
 		bool is_loiter_sp = (bool)(set_position_target_local_ned.type_mask & 0x3000);
 		bool is_idle_sp = (bool)(set_position_target_local_ned.type_mask & 0x4000);
+*/
+
+                /*miklm 
+                Manually define offboard flags are 
+                */
+                offboard_control_mode.ignore_position = false;
+		offboard_control_mode.ignore_alt_hold = false;
+		offboard_control_mode.ignore_velocity = true;
+		offboard_control_mode.ignore_acceleration_force = true;
+               
+       		bool is_takeoff_sp = false;
+		bool is_land_sp = false;
+		bool is_loiter_sp = true;
+		bool is_idle_sp = false;
 
 		offboard_control_mode.timestamp = hrt_absolute_time();
 
@@ -973,6 +987,8 @@ MavlinkReceiver::handle_message_set_position_target_local_ned(mavlink_message_t 
 
 					/* set the local pos values */
 					if (!offboard_control_mode.ignore_position) {
+						//if (fabs(set_position_target_local_ned.z - t_z) <0.0001) PX4_WARN("Z = OK!");
+                                                    
 						pos_sp_triplet.current.position_valid = true;
 						pos_sp_triplet.current.x = set_position_target_local_ned.x;
 						pos_sp_triplet.current.y = set_position_target_local_ned.y;
@@ -1020,6 +1036,7 @@ MavlinkReceiver::handle_message_set_position_target_local_ned(mavlink_message_t 
 
 					/* set the yaw sp value */
 					if (!offboard_control_mode.ignore_attitude) {
+                                                //PX4_WARN("YAW SetPoint SET");
 						pos_sp_triplet.current.yaw_valid = true;
 						pos_sp_triplet.current.yaw = set_position_target_local_ned.yaw;
 
@@ -1043,6 +1060,7 @@ MavlinkReceiver::handle_message_set_position_target_local_ned(mavlink_message_t 
 										    &pos_sp_triplet);
 
 					} else {
+                                                //PX4_WARN("ORB publish!"); 
 						orb_publish(ORB_ID(position_setpoint_triplet), _pos_sp_triplet_pub,
 							    &pos_sp_triplet);
 					}

@@ -700,7 +700,7 @@ MulticopterPositionControl::poll_subscriptions()
 	orb_check(_local_pos_sub, &updated);
 
 	if (updated) {
-		orb_copy(ORB_ID(vehicle_local_position), _local_pos_sub, &_local_pos);
+                orb_copy(ORB_ID(vehicle_local_position), _local_pos_sub, &_local_pos);
 
 		// check if a reset event has happened
 		// if the vehicle is in manual mode we will shift the setpoints of the
@@ -727,6 +727,7 @@ MulticopterPositionControl::poll_subscriptions()
 	if (updated) {
 		orb_copy(ORB_ID(position_setpoint_triplet), _pos_sp_triplet_sub, &_pos_sp_triplet);
 
+
 		/* to be a valid current triplet, altitude has to be finite */
 
 		if (!PX4_ISFINITE(_pos_sp_triplet.current.alt)) {
@@ -740,6 +741,7 @@ MulticopterPositionControl::poll_subscriptions()
 		    !PX4_ISFINITE(_pos_sp_triplet.previous.alt)) {
 			_pos_sp_triplet.previous.valid = false;
 		}
+
 	}
 
 	orb_check(_home_pos_sub, &updated);
@@ -1465,7 +1467,12 @@ MulticopterPositionControl::control_non_manual()
 
 		_att_sp.roll_body = 0.0f;
 		_att_sp.pitch_body = 0.0f;
-		_att_sp.yaw_body = _yaw;
+                //miklm If off board mode enabled - follow YAW, TO DO : implement separate from Attitude flag for yaw control.
+		if (_control_mode.flag_control_offboard_enabled) {
+			_att_sp.yaw_body = _pos_sp_triplet.current.yaw;
+			} else {			
+                		_att_sp.yaw_body = _yaw;
+				}
 		_att_sp.thrust = 0.0f;
 
 		_att_sp.timestamp = hrt_absolute_time();
@@ -1479,6 +1486,10 @@ void
 MulticopterPositionControl::control_offboard()
 {
 	if (_pos_sp_triplet.current.valid) {
+                
+                //miklm_cc 
+                //_control_mode.flag_control_position_enabled = true;
+                //_control_mode.flag_control_altitude_enabled = true;
 
 		if (_control_mode.flag_control_position_enabled && _pos_sp_triplet.current.position_valid) {
 			/* control position */
@@ -1490,7 +1501,6 @@ MulticopterPositionControl::control_offboard()
 
 		} else if (_control_mode.flag_control_velocity_enabled && _pos_sp_triplet.current.velocity_valid) {
 			/* control velocity */
-
 			/* reset position setpoint to current position if needed */
 			reset_pos_sp();
 
@@ -1536,7 +1546,6 @@ MulticopterPositionControl::control_offboard()
 			_hold_offboard_z = false;
 
 		} else if (_control_mode.flag_control_climb_rate_enabled && _pos_sp_triplet.current.velocity_valid) {
-
 			/* reset alt setpoint to current altitude if needed */
 			reset_alt_sp();
 
@@ -1561,8 +1570,14 @@ MulticopterPositionControl::control_offboard()
 
 		if (_pos_sp_triplet.current.yaw_valid) {
 			_att_sp.yaw_body = _pos_sp_triplet.current.yaw;
+                        /*miklm ТЕстовая проверка правильности передачи параметра для тестовых данных
+                        if (fabs(_att_sp.yaw_body - (float) 0.01)< (float) 0.001) {
+		                        mavlink_log_info(&_mavlink_log_pub, "[mpc] Yaw set point OK!");
+					}
+			*/
 
 		} else if (_pos_sp_triplet.current.yawspeed_valid) {
+                        //mavlink_log_info(&_mavlink_log_pub, "[mpc] Yaw speed valid!");
 			float yaw_target = wrap_pi(_att_sp.yaw_body + _pos_sp_triplet.current.yawspeed * _dt);
 			float yaw_offs = wrap_pi(yaw_target - _yaw);
 			const float yaw_rate_max = (_man_yaw_max < _global_yaw_max) ? _man_yaw_max : _global_yaw_max;
@@ -1578,6 +1593,7 @@ MulticopterPositionControl::control_offboard()
 		}
 
 	} else {
+                mavlink_log_info(&_mavlink_log_pub, "[mpc] Invalid setpoint");
 		_hold_offboard_xy = false;
 		_hold_offboard_z = false;
 		reset_pos_sp();
@@ -2344,6 +2360,7 @@ MulticopterPositionControl::do_control()
 void
 MulticopterPositionControl::control_position()
 {
+
 	calculate_velocity_setpoint();
 
 	if (_control_mode.flag_control_climb_rate_enabled || _control_mode.flag_control_velocity_enabled ||
@@ -2937,6 +2954,10 @@ MulticopterPositionControl::task_main()
 	/* get an initial update for all sensor and status data */
 	poll_subscriptions();
 
+        PX4_WARN("Task main!");
+        mavlink_log_info(&_mavlink_log_pub, "[mpc] TASK Main_cc");
+
+
 	/* We really need to know from the beginning if we're landed or in-air. */
 	orb_copy(ORB_ID(vehicle_land_detected), _vehicle_land_detected_sub, &_vehicle_land_detected);
 
@@ -3240,11 +3261,18 @@ MulticopterPositionControl::task_main()
 
 				if (_att_sp_pub != nullptr) {
 					orb_publish(_attitude_setpoint_id, _att_sp_pub, &_att_sp);
-
-				} else if (_attitude_setpoint_id) {
-					_att_sp_pub = orb_advertise(_attitude_setpoint_id, &_att_sp);
-				}
-			}
+                                        /*miklm check for att set point publication*/
+                                        /*
+					if (fabs(_att_sp.yaw_body - (float)0.01) < (float)0.001) {
+					   mavlink_log_info(&_mavlink_log_pub, "[mpc] ATT SP published with yaw OK");
+					   } else {
+					   mavlink_log_info(&_mavlink_log_pub, "[mpc] ATT SP published with yaw WRONG");
+                                            }
+					*/
+				        } else if (_attitude_setpoint_id) {
+					     _att_sp_pub = orb_advertise(_attitude_setpoint_id, &_att_sp);
+				            }
+			       }
 		}
 	}
 
