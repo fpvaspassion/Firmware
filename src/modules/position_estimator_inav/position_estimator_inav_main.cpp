@@ -469,6 +469,9 @@ int position_estimator_inav_thread_main(int argc, char *argv[])
 			PX4_WARN("INAV poll timeout");
 		}
 	}
+        //float etc = 1.22;
+        double dfg = (double) baro_offset;
+        mavlink_log_info(&mavlink_log_pub, "[inav] BARO offset is %8.4f", dfg);
 
 	/* main loop */
 	px4_pollfd_struct_t fds[1];
@@ -545,11 +548,16 @@ int position_estimator_inav_thread_main(int argc, char *argv[])
 					accel_updates++;
 				}
 
-				if (airdata.timestamp != baro_timestamp) {
-					corr_baro = baro_offset - airdata.baro_alt_meter - z_est[0];
-					baro_timestamp = airdata.timestamp;
-					baro_updates++;
-				}
+				bool baro_updated = false;
+				orb_check(vehicle_air_data_sub, &baro_updated);
+				if (baro_updated) {
+					orb_copy(ORB_ID(vehicle_air_data), vehicle_air_data_sub, &airdata);
+					if (airdata.timestamp != baro_timestamp) {
+						corr_baro = baro_offset - airdata.baro_alt_meter - z_est[0];
+						baro_timestamp = airdata.timestamp;
+						baro_updates++;
+						}
+					}
 			}
 
 

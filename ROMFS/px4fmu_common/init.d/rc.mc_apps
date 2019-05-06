@@ -11,9 +11,9 @@
 # INAV (deprecated)
 if param compare SYS_MC_EST_GROUP 0
 then
-	echo "ERROR [init] Estimator INAV deprecated. Using EKF2"
-	param set SYS_MC_EST_GROUP 2
-	param save
+	if attitude_estimator_q start
+	then
+		position_estimator_inav start
 fi
 
 # LPE

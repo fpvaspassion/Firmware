@@ -97,7 +97,7 @@ set(config_module_list
 	#
 	# General system control
 	#
-	modules/camera_feedback
+	#modules/camera_feedback
 	modules/commander
 	modules/events
 	#modules/gpio_led
@@ -110,18 +110,18 @@ set(config_module_list
 	#
 	# Estimation modules
 	#
-	#modules/attitude_estimator_q
+	modules/attitude_estimator_q
 	modules/ekf2
 	#modules/local_position_estimator
-	#modules/position_estimator_inav
+	modules/position_estimator_inav
 	#modules/landing_target_estimator
 	#modules/wind_estimator
 
 	#
 	# Vehicle Control
 	#
-	modules/fw_att_control
-	modules/fw_pos_control_l1
+	#modules/fw_att_control
+	#modules/fw_pos_control_l1
 	#modules/gnd_att_control
 	#modules/gnd_pos_control
 	modules/mc_att_control
