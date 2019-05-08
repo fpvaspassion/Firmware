@@ -66,6 +66,7 @@ struct position_estimator_inav_params {
 	float land_thr;
 	int32_t no_vision;
 	float delay_gps;
+	float delay_vis;
 	float flow_module_offset_x;
 	float flow_module_offset_y;
 	int32_t disable_mocap;
@@ -97,6 +98,7 @@ struct position_estimator_inav_param_handles {
 	param_t land_thr;
 	param_t no_vision;
 	param_t delay_gps;
+	param_t delay_vis;
 	param_t flow_module_offset_x;
 	param_t flow_module_offset_y;
 	param_t disable_mocap;

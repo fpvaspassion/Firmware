@@ -79,6 +79,7 @@
 #define PUB_INTERVAL 10000	// limit publish rate to 100 Hz
 #define EST_BUF_SIZE 250000 / PUB_INTERVAL		// buffer size is 0.5s
 #define MAX_WAIT_FOR_BARO_SAMPLE 3000000 // wait 3 secs for the baro to respond
+#define MIN_VISION_UPDATES 5 //When starts to receive vision corrections we wait for 5 cycles to have stable calculation of offsets and velocities
 
 static bool thread_should_exit = false; /**< Deamon exit flag */
 static bool thread_running = false; /**< Deamon status flag */
@@ -240,9 +241,11 @@ int position_estimator_inav_thread_main(int argc, char *argv[])
 	float est_buf[EST_BUF_SIZE][3][2];	// estimated position buffer
 	float R_buf[EST_BUF_SIZE][3][3];	// rotation matrix buffer
 	float R_gps[3][3];					// rotation matrix for GPS correction moment
+	float R_vis[3][3];					// rotation matrix for GPS correction moment
 	memset(est_buf, 0, sizeof(est_buf));
 	memset(R_buf, 0, sizeof(R_buf));
 	memset(R_gps, 0, sizeof(R_gps));
+	memset(R_vis, 0, sizeof(R_vis));
 	int buf_ptr = 0;
 
 	static const float min_eph_epv = 2.0f;	// min EPH/EPV, used for weight calculation
@@ -547,7 +550,7 @@ int position_estimator_inav_thread_main(int argc, char *argv[])
 					accel_timestamp = sensor.timestamp + sensor.accelerometer_timestamp_relative;
 					accel_updates++;
 				}
-
+				//Update baro measurements
 				bool baro_updated = false;
 				orb_check(vehicle_air_data_sub, &baro_updated);
 				if (baro_updated) {
@@ -790,22 +793,24 @@ int position_estimator_inav_thread_main(int argc, char *argv[])
 					static float last_vision_x = 0.0f;
 					static float last_vision_y = 0.0f;
 					static float last_vision_z = 0.0f;
+					static float init_vision_est_x = 0.0f;
+					static float init_vision_est_y = 0.0f;
+					static float init_vision_est_z = 0.0f;
 
 					/* reset position estimate on first vision update */
-					if (!vision_valid) {
-						x_est[0] = vision.x;
-						x_est[1] = vision.vx;
-						y_est[0] = vision.y;
-						y_est[1] = vision.vy;
+					if (vision_updates == 0) {
+						init_vision_est_x = x_est[0];
+						//x_est[1] = vision.vx;
+						init_vision_est_y = y_est[0];
+						//y_est[1] = vision.vy;
 
 						/* only reset the z estimate if the z weight parameter is not zero */
 						if (params.w_z_vision_p > MIN_VALID_W) {
-							z_est[0] = vision.z;
-							z_est[1] = vision.vz;
-						}
-
-						vision_valid = true;
-
+							init_vision_est_z = z_est[0];
+							//z_est[1] = vision.vz;
+						}						
+						mavlink_log_info(&mavlink_log_pub, "[inav] vision init: %.7f, %.7f, %8.4f", (double)init_vision_est_x, (double)init_vision_est_y, (double)init_vision_est_z);
+					
 						last_vision_x = vision.x;
 						last_vision_y = vision.y;
 						last_vision_z = vision.z;
@@ -813,11 +818,44 @@ int position_estimator_inav_thread_main(int argc, char *argv[])
 						warnx("VISION estimate valid");
 						mavlink_log_info(&mavlink_log_pub, "[inav] VISION estimate valid");
 					}
+					//Wait for some readings
+					if (vision_updates > MIN_VISION_UPDATES) {
+					    vision_valid = true;
+					}
 
-					/* calculate correction for position */
-					corr_vision[0][0] = vision.x - x_est[0];
-					corr_vision[1][0] = vision.y - y_est[0];
-					corr_vision[2][0] = vision.z - z_est[0];
+					/* calculate correction for position (if no vision delay) work only for standby */
+					/*
+					corr_vision[0][0] = init_vision_est_x - vision.x - x_est[0];
+					corr_vision[1][0] = init_vision_est_y - vision.y - y_est[0];
+					corr_vision[2][0] = init_vision_est_z - vision.z - z_est[0];
+					*/
+					/* calculate index of estimated values in buffer */
+					int est_i = buf_ptr - 1 - min(EST_BUF_SIZE - 1, max(0, (int)(params.delay_vis * 1000000.0f / PUB_INTERVAL)));
+
+						if (est_i < 0) {
+							est_i += EST_BUF_SIZE;
+						}
+
+					/* calculate correction for position with calculated delay */
+					corr_vision[0][0] = init_vision_est_x - vision.x - est_buf[est_i][0][0];   //x
+					corr_vision[1][0] = init_vision_est_x - vision.x - est_buf[est_i][1][0];   //y
+					corr_vision[2][0] = init_vision_est_x - vision.x - est_buf[est_i][2][0];   //z
+	
+					/* calculate correction for velocity(copied from GPS - to chewck and correct) */
+						/*
+						if (gps.vel_ned_valid) {
+							corr_gps[0][1] = gps.vel_n_m_s - est_buf[est_i][0][1];
+							corr_gps[1][1] = gps.vel_e_m_s - est_buf[est_i][1][1];
+							corr_gps[2][1] = gps.vel_d_m_s - est_buf[est_i][2][1];
+
+						} else {
+							corr_gps[0][1] = 0.0f;
+							corr_gps[1][1] = 0.0f;
+							corr_gps[2][1] = 0.0f;
+						}
+						*/
+					/* save rotation matrix at this moment */
+					memcpy(R_vis, R_buf[est_i], sizeof(R_vis));
 
 					static hrt_abstime last_vision_time = 0;
 
@@ -843,10 +881,13 @@ int position_estimator_inav_thread_main(int argc, char *argv[])
 						corr_vision[0][1] = 0.0f - x_est[1];
 						corr_vision[1][1] = 0.0f - y_est[1];
 						corr_vision[2][1] = 0.0f - z_est[1];
-					}
-
+						mavlink_log_info(&mavlink_log_pub, "[inav] No vision Velocity!");
+					}					
 					vision_updates++;
-				}
+				}  // end if vision topic updated
+					else {
+				  vision_valid = false;
+				 }
 			}
 
 			/* vehicle mocap position */
@@ -1068,6 +1109,11 @@ int position_estimator_inav_thread_main(int argc, char *argv[])
 
 		bool can_estimate_xy = (eph < max_eph_epv) || use_gps_xy || use_flow || use_vision_xy || use_mocap;
 
+		/* Disable GPS, baro if we use Vision*/
+		use_gps_xy = !use_vision_xy;
+		use_gps_z = !use_vision_z;
+        bool use_baro = !use_vision_z;
+
 		bool dist_bottom_valid = (t < lidar_valid_time + lidar_valid_timeout);
 
 		float w_xy_gps_p = params.w_xy_gps_p * w_gps_xy;
@@ -1138,6 +1184,20 @@ int position_estimator_inav_thread_main(int argc, char *argv[])
 			accel_bias_corr[2] -= corr_vision[2][0] * w_z_vision_p * w_z_vision_p;
 		}
 
+		/* transform error vector from NED frame to body frame */
+		for (int i = 0; i < 3; i++) {
+			float c = 0.0f;
+
+			for (int j = 0; j < 3; j++) {
+				c += R(j, i) * accel_bias_corr[j];
+			}
+
+			if (PX4_ISFINITE(c)) {
+				acc_bias[i] += c * params.w_acc_bias * dt;
+			}
+		}
+
+
 		/* accelerometer bias correction for MOCAP (use buffered rotation matrix) */
 		accel_bias_corr[0] = 0.0f;
 		accel_bias_corr[1] = 0.0f;
@@ -1162,7 +1222,7 @@ int position_estimator_inav_thread_main(int argc, char *argv[])
 			}
 		}
 
-		/* accelerometer bias correction for flow and baro (assume that there is no delay) */
+		/* accelerometer bias correction for flow, lidar and baro (assume that there is no delay) */
 		accel_bias_corr[0] = 0.0f;
 		accel_bias_corr[1] = 0.0f;
 		accel_bias_corr[2] = 0.0f;
@@ -1175,7 +1235,8 @@ int position_estimator_inav_thread_main(int argc, char *argv[])
 		if (use_lidar) {
 			accel_bias_corr[2] -= corr_lidar * params.w_z_lidar * params.w_z_lidar;
 
-		} else {
+		} 
+		if (use_baro) {
 			accel_bias_corr[2] -= corr_baro * params.w_z_baro * params.w_z_baro;
 		}
 
@@ -1206,7 +1267,8 @@ int position_estimator_inav_thread_main(int argc, char *argv[])
 		if (use_lidar) {
 			inertial_filter_correct(corr_lidar, dt, z_est, 0, params.w_z_lidar);
 
-		} else {
+		} 
+		if (use_baro){
 			inertial_filter_correct(corr_baro, dt, z_est, 0, params.w_z_baro);
 		}
 
@@ -1363,7 +1425,6 @@ int position_estimator_inav_thread_main(int argc, char *argv[])
 				buf_ptr = 0;
 			}
 
-
 			/* publish local position */
 			local_pos.xy_valid = can_estimate_xy;
 			local_pos.v_xy_valid = can_estimate_xy;
@@ -1469,6 +1530,7 @@ int inav_parameters_init(struct position_estimator_inav_param_handles *h)
 	h->land_thr = param_find("INAV_LAND_THR");
 	h->no_vision = param_find("CBRK_NO_VISION");
 	h->delay_gps = param_find("INAV_DELAY_GPS");
+	h->delay_vis = param_find("INAV_DELAY_VIS");
 	h->flow_module_offset_x = param_find("INAV_FLOW_DIST_X");
 	h->flow_module_offset_y = param_find("INAV_FLOW_DIST_Y");
 	h->disable_mocap = param_find("INAV_DISAB_MOCAP");
@@ -1504,6 +1566,7 @@ int inav_parameters_update(const struct position_estimator_inav_param_handles *h
 	param_get(h->land_thr, &(p->land_thr));
 	param_get(h->no_vision, &(p->no_vision));
 	param_get(h->delay_gps, &(p->delay_gps));
+	param_get(h->delay_vis, &(p->delay_vis));
 	param_get(h->flow_module_offset_x, &(p->flow_module_offset_x));
 	param_get(h->flow_module_offset_y, &(p->flow_module_offset_y));
 	param_get(h->disable_mocap, &(p->disable_mocap));

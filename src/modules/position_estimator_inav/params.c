@@ -275,7 +275,21 @@ PARAM_DEFINE_FLOAT(INAV_LAND_THR, 0.2f);
  * @unit s
  * @group Position Estimator INAV
  */
+
 PARAM_DEFINE_FLOAT(INAV_DELAY_GPS, 0.2f);
+
+/**
+ * VISION delay
+ *
+ * VISION delay compensation
+ *
+ * @min 0.0
+ * @max 1.0
+ * @unit s
+ * @group Position Estimator INAV
+ */
+
+PARAM_DEFINE_FLOAT(INAV_DELAY_VIS, 0.2f);
 
 /**
  * Flow module offset (center of rotation) in X direction
@@ -287,6 +301,7 @@ PARAM_DEFINE_FLOAT(INAV_DELAY_GPS, 0.2f);
  * @unit m
  * @group Position Estimator INAV
  */
+
 PARAM_DEFINE_FLOAT(INAV_FLOW_DIST_X, 0.0f);
 
 /**
